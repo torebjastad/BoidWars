@@ -96,21 +96,29 @@ function initGUI() {
     folderParams.add(engine.params, 'cohesionStrength', 0.0, 0.1).name('Cohesion Str').onChange(updateEngine);
 
     // --- Presets ---
-    gui.add(guiState, 'preset', Object.keys(SIM_PRESETS)).name('Simulation Preset').onChange(v => {
-        const p = SIM_PRESETS[v];
-        // Preserve un-specified params in preset
-        const newParams = { ...p };
-        if (newParams.triangleCount === undefined) newParams.triangleCount = engine.params.triangleCount;
-        if (newParams.triangleSize === undefined) newParams.triangleSize = engine.params.triangleSize;
+    const presetFolder = gui.addFolder('Presets');
+    Object.keys(SIM_PRESETS).forEach(key => {
+        const config = {
+            [key]: () => {
+                const p = SIM_PRESETS[key];
+                // Preserve un-specified params in preset
+                const newParams = { ...p };
+                if (newParams.triangleCount === undefined) newParams.triangleCount = engine.params.triangleCount;
+                if (newParams.triangleSize === undefined) newParams.triangleSize = engine.params.triangleSize;
 
-        engine.setParams(newParams);
-
-        // Update GUI display
-        folderParams.children.forEach(c => c.updateDisplay());
+                engine.setParams(newParams);
+                folderParams.children.forEach(c => c.updateDisplay());
+            }
+        };
+        presetFolder.add(config, key);
     });
 
-    gui.add(guiState, 'colorPreset', Object.keys(COLOR_PRESETS)).name('Color Theme').onChange(v => {
-        engine.setColor(COLOR_PRESETS[v]);
+    const colorFolder = gui.addFolder('Color Themes');
+    Object.keys(COLOR_PRESETS).forEach(key => {
+        const config = {
+            [key]: () => engine.setColor(COLOR_PRESETS[key])
+        };
+        colorFolder.add(config, key);
     });
 
     gui.add({
