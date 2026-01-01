@@ -216,11 +216,20 @@ async function init() {
     const context = canvas.getContext("webgpu");
     const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
 
-    context.configure({
-        device: device,
-        format: presentationFormat,
-        alphaMode: "premultiplied",
-    });
+    // --- Resize Handler ---
+    function onResize() {
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = window.innerWidth * dpr;
+        canvas.height = window.innerHeight * dpr;
+
+        context.configure({
+            device: device,
+            format: presentationFormat,
+            alphaMode: "premultiplied",
+        });
+    }
+    window.addEventListener('resize', onResize);
+    onResize();
 
     // --- State ---
     const appState = {
