@@ -11,18 +11,18 @@ struct SimParams {
   triangleCount: u32,
   // Game Params
   mousePos: vec2f,
-  gameMode: u32, // 0 = Sim, 1 = Game
+  gameMode: u32, 
+  time: f32,    
+  padding: f32,
 };
 
 struct TriangleInfo {
   position: vec2f,
   velocity: vec2f,
   ${isGame ? 'packId: f32,' : ''}
-  ${isGame ? 'padding: f32,' : ''} // Align to 8/16 bytes if needed, though vec2+vec2+f32+f32 = 24 bytes. 
-  // Let's align to 32 bytes for simplicity? Or 16? 
-  // vec2(8) + vec2(8) + f32(4) + pad(4) = 24.
-  // Closest power of 2 stride is nice but not required for storage.
-  // Let's use 24 bytes stride.
+  ${isGame ? 'padA: f32,' : ''} 
+  ${isGame ? 'padB: f32,' : ''} 
+  ${isGame ? 'padC: f32,' : ''} 
 };
 `;
 
@@ -42,6 +42,25 @@ fn mainCompute(@builtin(global_invocation_id) gid: vec3u) {
     }
 
     var instanceInfo = currentTriangles[index];
+    
+    // --- Food Physics (Pack 1) ---
+    ${isGame ? `
+    if (instanceInfo.packId > 0.5) {
+        // Just drift slowly
+        instanceInfo.velocity = normalize(instanceInfo.velocity) * 0.002;
+        
+        let bound = 4.0;
+        if (instanceInfo.position.x > bound) { instanceInfo.velocity.x = -abs(instanceInfo.velocity.x); }
+        if (instanceInfo.position.x < -bound) { instanceInfo.velocity.x = abs(instanceInfo.velocity.x); }
+        if (instanceInfo.position.y > bound) { instanceInfo.velocity.y = -abs(instanceInfo.velocity.y); }
+        if (instanceInfo.position.y < -bound) { instanceInfo.velocity.y = abs(instanceInfo.velocity.y); }
+        
+        instanceInfo.position += instanceInfo.velocity;
+        nextTriangles[index] = instanceInfo;
+        return;
+    }
+    ` : ''}
+
     var separation = vec2(0.0, 0.0);
     var alignment = vec2(0.0, 0.0);
     var alignmentCount = 0u;
@@ -56,7 +75,7 @@ fn mainCompute(@builtin(global_invocation_id) gid: vec3u) {
         }
         let other = currentTriangles[i];
         
-        ${isGame ? 'if (other.packId != myPack) { continue; }' : ''}
+        ${isGame ? 'if (abs(other.packId - myPack) > 0.1) { continue; }' : ''}
 
         let dist = distance(instanceInfo.position, other.position);
 
@@ -86,27 +105,36 @@ fn mainCompute(@builtin(global_invocation_id) gid: vec3u) {
     
     // --- Game Logic: Mouse Attraction (Player Pack 0) ---
     ${isGame ? `
-    if (params.gameMode == 1u && myPack == 0.0) {
-        let mouseDir = params.mousePos - instanceInfo.position;
+    if (params.gameMode == 1u && myPack < 0.5) {
+        let targetPos = params.mousePos; 
+        
+        let mouseDir = targetPos - instanceInfo.position;
         let distToMouse = length(mouseDir);
-        if (distToMouse > 0.05) { // Don't orbit too tight
-            force += normalize(mouseDir) * 0.02; // Attraction strength
+        if (distToMouse > 0.05) { 
+            force += normalize(mouseDir) * 0.03; 
         }
     }
     ` : ''}
 
     instanceInfo.velocity += force;
     
-    // Clamp velocity
-    instanceInfo.velocity = normalize(instanceInfo.velocity) * clamp(length(instanceInfo.velocity), 0.0, 0.01);
+    let maxSpeed = ${isGame ? '0.02' : '0.01'}; 
+    instanceInfo.velocity = normalize(instanceInfo.velocity) * clamp(length(instanceInfo.velocity), 0.0, maxSpeed);
 
-    // Boundary wrap (Or bounce for game?)
-    // Let's keep wrap for now, maybe wall bounce for game later.
+    // Boundary Logic
+    ${isGame ? `
+    let bound = 4.0;
+    if (instanceInfo.position.x > bound) { instanceInfo.position.x = bound; instanceInfo.velocity.x *= -1.0; }
+    if (instanceInfo.position.x < -bound) { instanceInfo.position.x = -bound; instanceInfo.velocity.x *= -1.0; }
+    if (instanceInfo.position.y > bound) { instanceInfo.position.y = bound; instanceInfo.velocity.y *= -1.0; }
+    if (instanceInfo.position.y < -bound) { instanceInfo.position.y = -bound; instanceInfo.velocity.y *= -1.0; }
+    ` : `
     let size = params.triangleSize;
     if (instanceInfo.position.x > 1.0 + size) { instanceInfo.position.x = -1.0 - size; }
     if (instanceInfo.position.y > 1.0 + size) { instanceInfo.position.y = -1.0 - size; }
     if (instanceInfo.position.x < -1.0 - size) { instanceInfo.position.x = 1.0 + size; }
     if (instanceInfo.position.y < -1.0 - size) { instanceInfo.position.y = 1.0 + size; }
+    `}
 
     instanceInfo.position += instanceInfo.velocity;
     nextTriangles[index] = instanceInfo;
@@ -122,6 +150,13 @@ export const getRenderWGSL = (isGame) => {
 @group(0) @binding(1) var<storage, read> currentTriangles: array<TriangleInfo>;
 @group(0) @binding(3) var<uniform> colorPalette: vec3f;
 
+struct VertexOutput {
+    @builtin(position) position: vec4f,
+    @location(0) color: vec4f,
+    @location(1) uv: vec2f,
+    @location(2) worldPos: vec2f,
+};
+
 fn rotate(v: vec2f, angle: f32) -> vec2f {
     let pos = vec2(
         (v.x * cos(angle)) - (v.y * sin(angle)),
@@ -134,18 +169,28 @@ fn getRotationFromVelocity(velocity: vec2f) -> f32 {
     return -atan2(velocity.x, velocity.y);
 }
 
-struct VertexOutput {
-    @builtin(position) position: vec4f,
-    @location(0) color: vec4f,
-};
-
 @vertex
 fn mainVert(@builtin(instance_index) ii: u32, @location(0) v: vec2f) -> VertexOutput {
     let instanceInfo = currentTriangles[ii];
     let angle = getRotationFromVelocity(instanceInfo.velocity);
-    let rotated = rotate(v, angle);
-    let offset = instanceInfo.position;
-    let pos = vec4(rotated + offset, 0.0, 1.0);
+    
+    // Pulse food size
+    var scale = 1.0;
+    ${isGame ? `
+    if (instanceInfo.packId > 0.5) {
+        scale = 1.0 + 0.3 * sin(params.time * 5.0 + f32(ii));
+    }
+    ` : ''}
+    
+    let rotated = rotate(v * scale, angle);
+    let worldPos = instanceInfo.position + rotated;
+    
+    var pos = vec4(worldPos, 0.0, 1.0);
+    
+    ${isGame ? `
+    pos.x *= 0.25; 
+    pos.y *= 0.25;
+    ` : ''}
 
     var baseColor = vec4(
         sin(angle + colorPalette.r) * 0.45 + 0.45,
@@ -155,24 +200,20 @@ fn mainVert(@builtin(instance_index) ii: u32, @location(0) v: vec2f) -> VertexOu
     );
 
     ${isGame ? `
-    // Game Mode Coloring
-    if (instanceInfo.packId == 0.0) {
-        // Player: Cyan/Blue-ish
+    if (instanceInfo.packId < 0.5) {
         baseColor = vec4(0.2, 0.8, 1.0, 1.0); 
-    } else if (instanceInfo.packId == 1.0) {
-        // Food: Yellow
-        baseColor = vec4(1.0, 1.0, 0.2, 1.0);
+    } else if (instanceInfo.packId > 0.5) {
+        baseColor = vec4(1.0, 0.8, 0.2, 1.0);
     } else {
-        // Enemy: Red
         baseColor = vec4(1.0, 0.2, 0.2, 1.0);
     }
     ` : ''}
 
-    return VertexOutput(pos, baseColor);
+    return VertexOutput(pos, baseColor, v, worldPos); 
 }
 
 @fragment
-fn mainFrag(@location(0) color: vec4f) -> @location(0) vec4f {
+fn mainFrag(@location(0) color: vec4f, @location(1) uv: vec2f, @location(2) worldPos: vec2f) -> @location(0) vec4f {
     return color;
 }
 `;

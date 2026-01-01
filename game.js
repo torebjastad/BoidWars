@@ -2,35 +2,29 @@
 import { BoidsEngine } from './engine.js';
 
 const STARTING_BOIDS = 4;
-const FOOD_COUNT = 20;
+const FOOD_COUNT = 30;
 const MAX_CAPACITY = 2000;
+const ARENA_SIZE = 4.0;
 
 const GAME_PARAMS = {
-    separationDistance: 0.1, // Larger for game feel
+    separationDistance: 0.15,
     separationStrength: 0.05,
     alignmentDistance: 0.2,
     alignmentStrength: 0.05,
     cohesionDistance: 0.3,
     cohesionStrength: 0.02,
-    triangleSize: 0.04,
+    triangleSize: 0.1, // Increased from 0.06 for better visibility
     triangleCount: STARTING_BOIDS,
 };
 
 const canvas = document.querySelector("canvas");
 const engine = new BoidsEngine(canvas, GAME_PARAMS, [0, 0, 0], true);
 
-// Game State
 let playerBoids = STARTING_BOIDS;
 let totalEntities = STARTING_BOIDS + FOOD_COUNT;
 
-const STRIDE_FLOATS = 6; // vec2(2) + vec2(2) + f32(1) + pad(1)
-const PACK_OFFSET = 4;
-
-// Keep data locally to manage spawns. 
-// However, since simulation updates positions on GPU, our local copy gets stale instantly.
-// We only use this local copy when RE-UPLOADING everything (e.g. after a collision).
-// Actually, `checkCollisions` will READ from GPU, Update logic, then WRITE back.
-// If we write back, we overwrite GPU simulation for that frame, which is fine.
+// Update stride to 8 floats (32 bytes)
+const STRIDE_FLOATS = 8;
 
 async function initGame() {
     const success = await engine.init();
@@ -41,9 +35,14 @@ async function initGame() {
     // Hook Input
     canvas.addEventListener('mousemove', e => {
         const rect = canvas.getBoundingClientRect();
-        const x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-        const y = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
-        engine.setParams({ mousePos: [x, y] });
+        let nx = (e.clientX - rect.left) / rect.width;
+        let ny = (e.clientY - rect.top) / rect.height;
+
+        // Map 0 -> -4, 1 -> 4.
+        let worldX = (nx * 2 - 1) * ARENA_SIZE;
+        let worldY = -(ny * 2 - 1) * ARENA_SIZE;
+
+        engine.setParams({ mousePos: [worldX, worldY] });
     });
 
     document.getElementById('start-btn').addEventListener('click', () => {
@@ -57,18 +56,18 @@ function resetGame() {
     playerBoids = STARTING_BOIDS;
     totalEntities = playerBoids + FOOD_COUNT;
 
-    // Initial Spawn
+    // Allocate buffer
     const data = new Float32Array(totalEntities * STRIDE_FLOATS);
 
     // Player
     for (let i = 0; i < playerBoids; i++) {
-        writeBoid(data, i, 0, 0, 0);
+        writeBoid(data, i, 0, (Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 0.5);
     }
     // Food
     for (let i = 0; i < FOOD_COUNT; i++) {
         writeBoid(data, playerBoids + i, 1,
-            (Math.random() * 2 - 1) * 0.9,
-            (Math.random() * 2 - 1) * 0.9
+            (Math.random() * 2 - 1) * (ARENA_SIZE - 0.2),
+            (Math.random() * 2 - 1) * (ARENA_SIZE - 0.2)
         );
     }
 
@@ -83,7 +82,9 @@ function writeBoid(data, index, packId, x, y) {
     data[base + 2] = (Math.random() - 0.5) * 0.05;
     data[base + 3] = (Math.random() - 0.5) * 0.05;
     data[base + 4] = packId;
-    data[base + 5] = 0;
+    data[base + 5] = 0; // Padding
+    data[base + 6] = 0; // Padding
+    data[base + 7] = 0; // Padding
 }
 
 function updateScore() {
@@ -91,7 +92,7 @@ function updateScore() {
 }
 
 let lastCheck = 0;
-const CHECK_INTERVAL = 100; // ms
+const CHECK_INTERVAL = 100;
 
 function gameLoop() {
     if (!engine.isRunning) return;
@@ -109,15 +110,6 @@ async function checkCollisions() {
     const gpuData = await engine.readData();
     if (!gpuData) return;
 
-    // Logic:
-    // Find all Player Boids (Pack 0)
-    // Find all Food Boids (Pack 1)
-    // Check collisions.
-    // If collision:
-    //   Change Food -> Player
-    //   Spawn New Food
-    //   Upload NEW data.
-
     let changed = false;
     const players = [];
     const foods = [];
@@ -129,7 +121,6 @@ async function checkCollisions() {
         else if (packId === 1) foods.push(i);
     }
 
-    // Simple N*M check (optimize if needed)
     for (const fIdx of foods) {
         const fBase = fIdx * STRIDE_FLOATS;
         const fx = gpuData[fBase + 0];
@@ -144,50 +135,25 @@ async function checkCollisions() {
             const dy = fy - py;
             const distSq = dx * dx + dy * dy;
 
-            // Eat threshold (0.05 is roughly triangle size)
-            if (distSq < 0.005) {
-                // EAT!
-                gpuData[fBase + 4] = 0; // Convert to player
-                // No velocity change logic for now
+            if (distSq < 0.01) {
+                gpuData[fBase + 4] = 0;
                 changed = true;
                 playerBoids++;
-
-                // Spawn new food?
-                // We need to APPEND or find a dead slot. 
-                // But efficient buffer usage requires append.
-                // For this MVP, let's just convert.
-                // We want exponential growth? 
-                // "Eat glowing bird food to grow your pack"
-                // converting IS growing.
-
-                // Spawn new food elsewhere to keep game going?
-                // If we convert, we lose food. eventually no food.
-                // So we should ALSO spawn a new boid (Food) at random pos.
-
-                // Add new entity
-                // This requires resizing buffer.
-                // We can't resize `gpuData` in place easily if it's a view.
-                // It's a Float32Array copy.
-                // But `setTriangleData` handles it.
-                break; // One food eaten by one player is enough
+                break;
             }
         }
     }
 
     if (changed) {
-        // If we want to add strictly new food (to replace eaten):
-        // append to data.
         let newData = gpuData;
-        const newFoodCount = 1; // Replenish
-        const newTotal = totalEntities + newFoodCount;
+        const newTotal = totalEntities + 1;
 
         const biggerData = new Float32Array(newTotal * STRIDE_FLOATS);
         biggerData.set(gpuData);
 
-        // Add new food at end
         writeBoid(biggerData, totalEntities, 1,
-            (Math.random() * 2 - 1) * 0.9,
-            (Math.random() * 2 - 1) * 0.9
+            (Math.random() * 2 - 1) * (ARENA_SIZE - 0.2),
+            (Math.random() * 2 - 1) * (ARENA_SIZE - 0.2)
         );
 
         totalEntities = newTotal;

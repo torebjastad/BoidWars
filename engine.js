@@ -1,7 +1,14 @@
 
 import { getComputeWGSL, getRenderWGSL } from './shaders.js';
 
-export const PARAMS_SIZE_BYTES = 48; // Updated for new fields
+// Struct Layout:
+// ...
+// triangleCount (28) (u32)
+// mousePos (32) (vec2f)
+// gameMode (40) (u32)
+// time (44) (f32)
+// padding/camera? (48)
+export const PARAMS_SIZE_BYTES = 64; // Bumped size for safety/alignment
 
 export class BoidsEngine {
     constructor(canvas, initialParams, initialColor, isGame = false) {
@@ -9,6 +16,7 @@ export class BoidsEngine {
         this.params = {
             gameMode: isGame ? 1 : 0,
             mousePos: [0, 0],
+            time: 0,
             ...initialParams
         };
         this.color = [...initialColor];
@@ -31,6 +39,7 @@ export class BoidsEngine {
         this.bindGroupB = null;
 
         this.frameCount = 0;
+        this.startTime = performance.now();
         this.isRunning = false;
 
         // Resize
@@ -78,11 +87,33 @@ export class BoidsEngine {
     async createResources() {
         const device = this.device;
 
-        // Shader Modules
         const computeModule = device.createShaderModule({ code: getComputeWGSL(this.isGame) });
-        const renderModule = device.createShaderModule({ code: getRenderWGSL(this.isGame) });
+        computeModule.getCompilationInfo().then((info) => {
+            if (info.messages.length > 0) {
+                let hasError = false;
+                for (const msg of info.messages) {
+                    console.log(`Compute Shader: ${msg.message} (Line ${msg.lineNum})`);
+                    if (msg.type === 'error') hasError = true;
+                }
+                if (hasError) {
+                    const errorMsg = info.messages.find(m => m.type === 'error')?.message || "Unknown error";
+                    alert(`Compute Shader Error: ${errorMsg}`);
+                }
+            }
+        });
 
-        // Buffers
+        const renderModule = device.createShaderModule({ code: getRenderWGSL(this.isGame) });
+        renderModule.getCompilationInfo().then((info) => {
+            if (info.messages.length > 0) {
+                let hasError = false;
+                for (const msg of info.messages) {
+                    console.log(`Render Shader: ${msg.message} (Line ${msg.lineNum})`);
+                    if (msg.type === 'error') hasError = true;
+                }
+                if (hasError) alert("Render shader compilation failed! Open console.");
+            }
+        });
+
         this.paramsBuffer = device.createBuffer({
             size: PARAMS_SIZE_BYTES,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -98,18 +129,16 @@ export class BoidsEngine {
             usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
         });
 
-        // Initialize Param/Color Buffers
         this.updateParamsBuffer();
         this.updateColorBuffer();
         this.updateVertexBuffer();
 
-        // Pipelines
         this.bindGroupLayout = device.createBindGroupLayout({
             entries: [
-                { binding: 0, visibility: GPUShaderStage.COMPUTE | GPUShaderStage.VERTEX, buffer: { type: "uniform" } }, // Params
-                { binding: 1, visibility: GPUShaderStage.COMPUTE | GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } }, // Current
-                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // Next
-                { binding: 3, visibility: GPUShaderStage.VERTEX, buffer: { type: "uniform" } }, // Color
+                { binding: 0, visibility: GPUShaderStage.COMPUTE | GPUShaderStage.VERTEX, buffer: { type: "uniform" } },
+                { binding: 1, visibility: GPUShaderStage.COMPUTE | GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } },
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 3, visibility: GPUShaderStage.VERTEX, buffer: { type: "uniform" } },
             ]
         });
 
@@ -138,7 +167,6 @@ export class BoidsEngine {
             primitive: { topology: "triangle-list" }
         });
 
-        // Init simulation state
         this.initTriangleBuffers(this.params.triangleCount);
         this.createBindGroups();
     }
@@ -147,27 +175,26 @@ export class BoidsEngine {
         if (this.triangleBufferA) this.triangleBufferA.destroy();
         if (this.triangleBufferB) this.triangleBufferB.destroy();
 
-        const stride = this.isGame ? 24 : 16;
+        const stride = this.isGame ? 32 : 16;
         const byteSize = count * stride;
 
         let data;
         if (initialDataArray) {
             data = initialDataArray;
-            // Ensure data length matches byteSize requirement (padding?)
-            // If passed data is smaller/larger, we might need to handle it.
-            // Assumption: caller passes correct usage.
         } else {
             data = new Float32Array((byteSize / 4));
             const floatsPerBoid = stride / 4;
             for (let i = 0; i < count; ++i) {
                 const base = i * floatsPerBoid;
-                data[base + 0] = Math.random() * 2 - 1; // Pos X
-                data[base + 1] = Math.random() * 2 - 1; // Pos Y
-                data[base + 2] = Math.random() * 0.1 - 0.05; // Vel X
-                data[base + 3] = Math.random() * 0.1 - 0.05; // Vel Y
+                data[base + 0] = Math.random() * 2 - 1;
+                data[base + 1] = Math.random() * 2 - 1;
+                data[base + 2] = Math.random() * 0.1 - 0.05;
+                data[base + 3] = Math.random() * 0.1 - 0.05;
                 if (this.isGame) {
-                    data[base + 4] = 0; // Pack ID (Default)
-                    data[base + 5] = 0; // Padding
+                    data[base + 4] = 0;
+                    data[base + 5] = 0;
+                    data[base + 6] = 0;
+                    data[base + 7] = 0;
                 }
             }
         }
@@ -224,6 +251,7 @@ export class BoidsEngine {
             view.setFloat32(36, p.mousePos[1], true);
         }
         view.setUint32(40, p.gameMode || 0, true);
+        view.setFloat32(44, (performance.now() - this.startTime) / 1000.0, true); // Time
 
         this.device.queue.writeBuffer(this.paramsBuffer, 0, data);
     }
@@ -290,6 +318,10 @@ export class BoidsEngine {
 
         this.frameCount++;
 
+        // Update Time per frame
+        this.params.time = (performance.now() - this.startTime) / 1000.0;
+        this.updateParamsBuffer(); // Potentially expensive if 60fps? 32 bytes is cheap.
+
         const commandEncoder = this.device.createCommandEncoder();
 
         const useBindGroupA = this.frameCount % 2 === 0;
@@ -305,7 +337,7 @@ export class BoidsEngine {
         const renderPass = commandEncoder.beginRenderPass({
             colorAttachments: [{
                 view: this.context.getCurrentTexture().createView(),
-                clearValue: [0.05, 0.05, 0.05, 1],
+                clearValue: [0.0, 0.0, 0.0, 0.0],
                 loadOp: "clear",
                 storeOp: "store"
             }]
@@ -327,27 +359,13 @@ export class BoidsEngine {
     async readData() {
         if (!this.isRunning) return null;
 
-        // Ensure we wait for queue to be idle?
         await this.device.queue.onSubmittedWorkDone();
 
-        // Latest buffer is determined by current frameCount state relative to last exec.
-        // frame() incremented frameCount.
-        // If frameCount = 1 (completed). We computed odd.
-        // Odd Frame: useBindGroupA = false. BindGroupB.
-        // BindGroupB entries: 2:A (Source), 1:B (Dest?).
-        // Wait, my `createBindGroups` logic:
-        // GroupA: 0:P, 1:A(Read), 2:B(Write)
-        // GroupB: 0:P, 1:B(Read), 2:A(Write)
-
-        // Frame 1 (Odd): useBindGroupA = false. B is used. 1:B(Read), 2:A(Write).
-        // Result is in A.
         const resultInBufferA = (this.frameCount % 2 !== 0);
         const latestBuffer = resultInBufferA ? this.triangleBufferA : this.triangleBufferB;
 
-        const stride = this.isGame ? 24 : 16;
+        const stride = this.isGame ? 32 : 16;
         const size = this.params.triangleCount * stride;
-
-        // Align size to 4
 
         const gpuReadBuffer = this.device.createBuffer({
             size: size,
