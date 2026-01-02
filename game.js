@@ -35,6 +35,7 @@ const STRIDE_FLOATS = 8;
 // Camera state
 const BASE_ZOOM = 0.5;      // Initial zoom (close view)
 const MIN_ZOOM = 0.15;      // Max zoomed out
+const ZOOM_EXPONENT = 0.1;  // How fast zoom changes with pack size (lower = slower zoom out)
 const CAMERA_SMOOTHING = 0.1; // Lower = smoother camera
 let cameraX = 0, cameraY = 0;
 let cameraZoom = BASE_ZOOM;
@@ -137,7 +138,7 @@ function updatePackCenter(gpuData, playerIndices) {
     packCenterY = sumY / playerIndices.length;
 
     // Calculate target zoom based on pack size
-    targetZoom = Math.max(MIN_ZOOM, BASE_ZOOM / Math.sqrt(playerBoids));
+    targetZoom = Math.max(MIN_ZOOM, BASE_ZOOM / Math.pow(playerBoids, ZOOM_EXPONENT));
 }
 
 // Smooth camera interpolation - called every frame for smoothness
