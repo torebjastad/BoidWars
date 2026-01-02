@@ -1,10 +1,11 @@
 
 import { BoidsEngine } from './engine.js';
 
-const STARTING_BOIDS = 10;
-const FOOD_COUNT = 300;
+const STARTING_BOIDS = 4;
+const FOOD_COUNT = 50;
 const MAX_CAPACITY = 2000;
 const ARENA_SIZE = 4.0;
+const COLOR_FADE_DURATION = 5.0; // Seconds for captured boids to fade from yellow to blue
 
 const GAME_PARAMS = {
     // Blob Preset (Scaled x3.33 for size 0.1)
@@ -16,6 +17,7 @@ const GAME_PARAMS = {
     cohesionStrength: 0.009,    // Exact from preset
     triangleSize: 0.1,
     triangleCount: STARTING_BOIDS,
+    colorFadeDuration: COLOR_FADE_DURATION,
 };
 
 const canvas = document.querySelector("canvas");
@@ -80,14 +82,14 @@ function resetGame() {
     updateScore();
 }
 
-function writeBoid(data, index, packId, x, y) {
+function writeBoid(data, index, packId, x, y, captureTime = 0) {
     const base = index * STRIDE_FLOATS;
     data[base + 0] = x;
     data[base + 1] = y;
     data[base + 2] = (Math.random() - 0.5) * 0.05;
     data[base + 3] = (Math.random() - 0.5) * 0.05;
     data[base + 4] = packId;
-    data[base + 5] = 0; // Padding
+    data[base + 5] = captureTime; // Time when captured (0 = original pack)
     data[base + 6] = 0; // Padding
     data[base + 7] = 0; // Padding
 }
@@ -142,6 +144,7 @@ async function checkCollisions() {
 
             if (distSq < 0.01) {
                 gpuData[fBase + 4] = 0; // Set packId to 0 (Player)
+                gpuData[fBase + 5] = engine.params.time; // Set captureTime for color fade
 
                 // Calculate pack center for outward push
                 let centerX = 0, centerY = 0;

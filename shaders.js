@@ -14,13 +14,14 @@ struct SimParams {
   gameMode: u32, 
   time: f32,    
   clickState: u32,
+  colorFadeDuration: f32,
 };
 
 struct TriangleInfo {
   position: vec2f,
   velocity: vec2f,
   ${isGame ? 'packId: f32,' : ''}
-  ${isGame ? 'padA: f32,' : ''} 
+  ${isGame ? 'captureTime: f32,' : ''} 
   ${isGame ? 'padB: f32,' : ''} 
   ${isGame ? 'padC: f32,' : ''} 
 };
@@ -233,12 +234,20 @@ fn mainVert(@builtin(instance_index) ii: u32, @location(0) v: vec2f) -> VertexOu
     );
 
     ${isGame ? `
+    let playerColor = vec4(0.2, 0.8, 1.0, 1.0);
+    let foodColor = vec4(1.0, 0.8, 0.2, 1.0);
+    
     if (instanceInfo.packId < 0.5) {
-        baseColor = vec4(0.2, 0.8, 1.0, 1.0); 
-    } else if (instanceInfo.packId > 0.5) {
-        baseColor = vec4(1.0, 0.8, 0.2, 1.0);
+        // Player pack - check if recently captured
+        if (instanceInfo.captureTime > 0.0) {
+            let elapsed = params.time - instanceInfo.captureTime;
+            let t = clamp(elapsed / params.colorFadeDuration, 0.0, 1.0);
+            baseColor = mix(foodColor, playerColor, t);
+        } else {
+            baseColor = playerColor;
+        }
     } else {
-        baseColor = vec4(1.0, 0.2, 0.2, 1.0);
+        baseColor = foodColor;
     }
     ` : ''}
 

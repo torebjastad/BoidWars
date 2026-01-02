@@ -264,6 +264,7 @@ export class BoidsEngine {
         view.setUint32(40, p.gameMode || 0, true);
         view.setFloat32(44, (performance.now() - this.startTime) / 1000.0, true); // Time
         view.setUint32(48, p.clickState, true); // Click State
+        view.setFloat32(52, p.colorFadeDuration || 5.0, true); // Color Fade Duration
 
         this.device.queue.writeBuffer(this.paramsBuffer, 0, data);
     }
