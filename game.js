@@ -5,8 +5,8 @@ const STARTING_BOIDS = 4;
 const STARTING_ENEMY_BOIDS = 4;  // Enemy flock starting size
 const FOOD_COUNT = 50;
 const MAX_CAPACITY = 2000;
-const ARENA_SIZE = 8.0; // Doubled from 4.0
-const COLOR_FADE_DURATION = 5.0; // Seconds for captured boids to fade from yellow to blue
+const ARENA_SIZE = 4.0; // Doubled from 4.0
+const COLOR_FADE_DURATION = 4.0; // Seconds for captured boids to fade
 
 const GAME_PARAMS = {
     // Blob Preset (Scaled x3.33 for size 0.1)
@@ -15,7 +15,7 @@ const GAME_PARAMS = {
     alignmentDistance: 0.15,    // 0.047 * 3.33
     alignmentStrength: 0.1,     // Exact from preset
     cohesionDistance: 5.0,      // 0.3 * 3.33
-    cohesionStrength: 0.009,    // Exact from preset
+    cohesionStrength: 0.002,    // Exact from preset
     triangleSize: 0.1,
     triangleCount: STARTING_BOIDS,
     colorFadeDuration: COLOR_FADE_DURATION,
@@ -229,6 +229,7 @@ async function checkCollisions() {
             const dy = fy - py;
 
             if (dx * dx + dy * dy < 0.01) {
+                gpuData[fBase + 6] = gpuData[fBase + 4]; // Store previous packId
                 gpuData[fBase + 4] = 0; // Set packId to Player
                 gpuData[fBase + 5] = engine.params.time;
                 pushOutward(gpuData, fBase, fx, fy, players);
@@ -250,6 +251,7 @@ async function checkCollisions() {
             const dy = fy - ey;
 
             if (dx * dx + dy * dy < 0.01) {
+                gpuData[fBase + 6] = gpuData[fBase + 4]; // Store previous packId
                 gpuData[fBase + 4] = 2; // Set packId to Enemy
                 gpuData[fBase + 5] = engine.params.time;
                 pushOutward(gpuData, fBase, fx, fy, enemies);
@@ -295,6 +297,7 @@ async function checkCollisions() {
                 const dy = ey - py;
 
                 if (dx * dx + dy * dy < 0.02) {
+                    gpuData[eBase + 6] = gpuData[eBase + 4]; // Store previous packId
                     gpuData[eBase + 4] = 0; // Convert to Player
                     gpuData[eBase + 5] = engine.params.time;
                     pushOutward(gpuData, eBase, ex, ey, players);
@@ -322,6 +325,7 @@ async function checkCollisions() {
                 const dy = py - ey;
 
                 if (dx * dx + dy * dy < 0.02) {
+                    gpuData[pBase + 6] = gpuData[pBase + 4]; // Store previous packId
                     gpuData[pBase + 4] = 2; // Convert to Enemy
                     gpuData[pBase + 5] = engine.params.time;
                     pushOutward(gpuData, pBase, px, py, enemies);

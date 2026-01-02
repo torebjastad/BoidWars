@@ -27,7 +27,7 @@ struct TriangleInfo {
   velocity: vec2f,
   ${isGame ? 'packId: f32,' : ''}
   ${isGame ? 'captureTime: f32,' : ''} 
-  ${isGame ? 'padB: f32,' : ''} 
+  ${isGame ? 'prevPackId: f32,' : ''}  // Previous pack for color fade 
   ${isGame ? 'padC: f32,' : ''} 
 };
 `;
@@ -244,12 +244,20 @@ fn mainVert(@builtin(instance_index) ii: u32, @location(0) v: vec2f) -> VertexOu
     let foodColor = vec4(1.0, 0.8, 0.2, 1.0);    // Yellow
     let enemyColor = vec4(1.0, 0.3, 0.2, 1.0);   // Red
     
+    // Determine "from" color based on prevPackId
+    var fromColor = foodColor;
+    if (instanceInfo.prevPackId < 0.5) {
+        fromColor = playerColor;
+    } else if (instanceInfo.prevPackId > 1.5) {
+        fromColor = enemyColor;
+    }
+    
     if (instanceInfo.packId < 0.5) {
         // Player pack (packId 0)
         if (instanceInfo.captureTime > 0.0) {
             let elapsed = params.time - instanceInfo.captureTime;
             let t = clamp(elapsed / params.colorFadeDuration, 0.0, 1.0);
-            baseColor = mix(foodColor, playerColor, t);
+            baseColor = mix(fromColor, playerColor, t);
         } else {
             baseColor = playerColor;
         }
@@ -261,7 +269,7 @@ fn mainVert(@builtin(instance_index) ii: u32, @location(0) v: vec2f) -> VertexOu
         if (instanceInfo.captureTime > 0.0) {
             let elapsed = params.time - instanceInfo.captureTime;
             let t = clamp(elapsed / params.colorFadeDuration, 0.0, 1.0);
-            baseColor = mix(foodColor, enemyColor, t);
+            baseColor = mix(fromColor, enemyColor, t);
         } else {
             baseColor = enemyColor;
         }
