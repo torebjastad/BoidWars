@@ -19,6 +19,7 @@ struct SimParams {
   cameraPos: vec2f,
   cameraZoom: f32,
   aspectRatio: f32, // width / height
+  arenaSize: f32,   // Arena boundary size
 };
 
 struct TriangleInfo {
@@ -85,7 +86,7 @@ fn mainCompute(@builtin(global_invocation_id) gid: vec3u) {
             instanceInfo.velocity = normalize(instanceInfo.velocity) * 0.02; 
         }
         
-        let bound = 8.0; // Arena size
+        let bound = params.arenaSize;
         if (instanceInfo.position.x > bound) { instanceInfo.velocity.x = -abs(instanceInfo.velocity.x); }
         if (instanceInfo.position.x < -bound) { instanceInfo.velocity.x = abs(instanceInfo.velocity.x); }
         if (instanceInfo.position.y > bound) { instanceInfo.velocity.y = -abs(instanceInfo.velocity.y); }
@@ -166,7 +167,7 @@ fn mainCompute(@builtin(global_invocation_id) gid: vec3u) {
 
     // Boundary Logic
     ${isGame ? `
-    let bound = 8.0; // Arena size
+    let bound = params.arenaSize;
     if (instanceInfo.position.x > bound) { instanceInfo.position.x = bound; instanceInfo.velocity.x *= -1.0; }
     if (instanceInfo.position.x < -bound) { instanceInfo.position.x = -bound; instanceInfo.velocity.x *= -1.0; }
     if (instanceInfo.position.y > bound) { instanceInfo.position.y = bound; instanceInfo.velocity.y *= -1.0; }

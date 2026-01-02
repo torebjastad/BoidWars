@@ -18,6 +18,7 @@ const GAME_PARAMS = {
     triangleSize: 0.1,
     triangleCount: STARTING_BOIDS,
     colorFadeDuration: COLOR_FADE_DURATION,
+    arenaSize: ARENA_SIZE,      // Pass to shader for boundary logic
     // Camera initial values
     cameraPos: [0, 0],
     cameraZoom: 0.5,

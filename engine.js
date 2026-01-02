@@ -12,7 +12,8 @@ import { getComputeWGSL, getRenderWGSL, getArenaBorderWGSL, getArenaGridWGSL } f
 // cameraPos (56) (vec2f)
 // cameraZoom (64) (f32)
 // aspectRatio (68) (f32)
-export const PARAMS_SIZE_BYTES = 80; // Includes camera and aspect ratio params
+// arenaSize (72) (f32)
+export const PARAMS_SIZE_BYTES = 80; // Includes camera, aspect ratio, and arena size params
 
 export class BoidsEngine {
     constructor(canvas, initialParams, initialColor, isGame = false) {
@@ -54,7 +55,6 @@ export class BoidsEngine {
         this.borderPipeline = null;
         this.borderParamsBuffer = null;
         this.borderBindGroup = null;
-        this.arenaSize = 8.0; // Arena boundary size (doubled from 4.0)
 
         // Grid resources (game mode only)
         this.gridPipeline = null;
@@ -381,6 +381,8 @@ export class BoidsEngine {
         // Aspect ratio (width / height)
         const aspectRatio = this.canvas.width / this.canvas.height;
         view.setFloat32(68, aspectRatio, true);
+        // Arena size
+        view.setFloat32(72, p.arenaSize || 4.0, true);
 
         this.device.queue.writeBuffer(this.paramsBuffer, 0, data);
     }
@@ -483,7 +485,7 @@ export class BoidsEngine {
             const gridData = new Float32Array([
                 camPos[0], camPos[1],
                 this.params.cameraZoom || 0.25,
-                this.arenaSize,
+                this.params.arenaSize || 4.0,
                 this.gridSpacing,
                 aspectRatio
             ]);
@@ -493,7 +495,7 @@ export class BoidsEngine {
             renderPass.setBindGroup(0, this.gridBindGroup);
 
             // Calculate vertex count: (lineCount * 2) for horizontal + (lineCount * 2) for vertical
-            const lineCount = Math.floor(this.arenaSize * 2 / this.gridSpacing) + 1;
+            const lineCount = Math.floor((this.params.arenaSize || 4.0) * 2 / this.gridSpacing) + 1;
             renderPass.draw(lineCount * 2 * 2); // horizontal + vertical lines
         }
         // Draw boids (need to re-set pipeline after grid)
@@ -510,7 +512,7 @@ export class BoidsEngine {
             const borderData = new Float32Array([
                 camPos[0], camPos[1],
                 this.params.cameraZoom || 0.25,
-                this.arenaSize,
+                this.params.arenaSize || 4.0,
                 borderThickness,
                 aspectRatio
             ]);
