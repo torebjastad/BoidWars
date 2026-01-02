@@ -213,6 +213,27 @@ fn getRotationFromVelocity(velocity: vec2f) -> f32 {
     return -atan2(velocity.x, velocity.y);
 }
 
+${isGame ? `
+// Generate color from hue (0-1 range)
+fn hueToRGB(h: f32) -> vec3f {
+    let r = abs(h * 6.0 - 3.0) - 1.0;
+    let g = 2.0 - abs(h * 6.0 - 2.0);
+    let b = 2.0 - abs(h * 6.0 - 4.0);
+    return clamp(vec3f(r, g, b), vec3f(0.0), vec3f(1.0));
+}
+
+// Get flock color by packId (procedural for unlimited flocks)
+fn getFlockColor(packId: f32) -> vec4f {
+    if (packId < 0.5) { return vec4(0.2, 0.8, 1.0, 1.0); } // Player - blue
+    if (packId < 1.5) { return vec4(1.0, 0.8, 0.2, 1.0); } // Food - yellow
+    // Enemy flocks: distribute hues
+    let enemyIndex = packId - 2.0;
+    let hue = fract(0.0 + enemyIndex * 0.13);
+    let rgb = hueToRGB(hue);
+    return vec4(rgb * 0.9 + 0.1, 1.0);
+}
+` : ''}
+
 @vertex
 fn mainVert(@builtin(instance_index) ii: u32, @location(0) v: vec2f) -> VertexOutput {
     let instanceInfo = currentTriangles[ii];
@@ -242,22 +263,12 @@ fn mainVert(@builtin(instance_index) ii: u32, @location(0) v: vec2f) -> VertexOu
     ${isGame ? `
     let playerColor = vec4(0.2, 0.8, 1.0, 1.0);  // Blue (packId 0)
     let foodColor = vec4(1.0, 0.8, 0.2, 1.0);    // Yellow (packId 1)
-    let enemy1Color = vec4(1.0, 0.3, 0.2, 1.0);  // Red (packId 2)
-    let enemy2Color = vec4(0.8, 0.3, 1.0, 1.0);  // Purple (packId 3)
-    let enemy3Color = vec4(0.3, 1.0, 0.4, 1.0);  // Green (packId 4)
     
-    // Get target color based on current packId
-    var targetColor = playerColor;
-    if (instanceInfo.packId > 1.5 && instanceInfo.packId < 2.5) { targetColor = enemy1Color; }
-    else if (instanceInfo.packId > 2.5 && instanceInfo.packId < 3.5) { targetColor = enemy2Color; }
-    else if (instanceInfo.packId > 3.5) { targetColor = enemy3Color; }
-    
-    // Get "from" color based on prevPackId
-    var fromColor = foodColor;
-    if (instanceInfo.prevPackId < 0.5) { fromColor = playerColor; }
-    else if (instanceInfo.prevPackId > 1.5 && instanceInfo.prevPackId < 2.5) { fromColor = enemy1Color; }
-    else if (instanceInfo.prevPackId > 2.5 && instanceInfo.prevPackId < 3.5) { fromColor = enemy2Color; }
-    else if (instanceInfo.prevPackId > 3.5) { fromColor = enemy3Color; }
+    var targetColor = getFlockColor(instanceInfo.packId);
+    var fromColor = getFlockColor(instanceInfo.prevPackId);
+    if (instanceInfo.prevPackId < 0.1 && instanceInfo.captureTime == 0.0) {
+        fromColor = foodColor; // Default from food if not captured
+    }
     
     if (instanceInfo.packId < 0.5) {
         // Player pack (packId 0)

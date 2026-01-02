@@ -3,7 +3,7 @@ import { BoidsEngine } from './engine.js';
 
 const STARTING_BOIDS = 4;
 const STARTING_ENEMY_BOIDS = 4;  // Each enemy flock starting size
-const ENEMY_FLOCK_COUNT = 3;     // Number of enemy flocks
+const ENEMY_FLOCK_COUNT = 13;     // Number of enemy flocks
 const FOOD_COUNT = 50;
 const MAX_CAPACITY = 2000;
 const ARENA_SIZE = 8.0;
@@ -54,22 +54,36 @@ const canvas = document.querySelector("canvas");
 const engine = new BoidsEngine(canvas, GAME_PARAMS, [0, 0, 0], true);
 
 let playerBoids = STARTING_BOIDS;
-// Flocks array: [{ packId, count, name }]
-let flocks = [
-    { packId: 0, count: STARTING_BOIDS, name: FLOCK_NAMES[0] },  // Player
-    { packId: 2, count: STARTING_ENEMY_BOIDS, name: FLOCK_NAMES[1] },
-    { packId: 3, count: STARTING_ENEMY_BOIDS, name: FLOCK_NAMES[2] },
-    { packId: 4, count: STARTING_ENEMY_BOIDS, name: FLOCK_NAMES[3] },
-];
+
+// Generate flocks dynamically based on ENEMY_FLOCK_COUNT
+function generateFlocks() {
+    const result = [{ packId: 0, count: STARTING_BOIDS, name: FLOCK_NAMES[0] }]; // Player
+    for (let i = 0; i < ENEMY_FLOCK_COUNT; i++) {
+        result.push({
+            packId: i + 2,  // packId 2, 3, 4, ...
+            count: STARTING_ENEMY_BOIDS,
+            name: FLOCK_NAMES[(i + 1) % FLOCK_NAMES.length]  // Cycle through names
+        });
+    }
+    return result;
+}
+let flocks = generateFlocks();
 let totalEntities = STARTING_BOIDS + (STARTING_ENEMY_BOIDS * ENEMY_FLOCK_COUNT) + FOOD_COUNT;
 
-// Spawn positions for each flock (corners)
-const SPAWN_POSITIONS = [
-    [0, 0],                           // Player: center
-    [ARENA_SIZE - 1.5, ARENA_SIZE - 1.5],   // Flock 2: top-right
-    [-ARENA_SIZE + 1.5, ARENA_SIZE - 1.5],  // Flock 3: top-left
-    [-ARENA_SIZE + 1.5, -ARENA_SIZE + 1.5], // Flock 4: bottom-left
-];
+// Generate spawn positions around the arena perimeter
+function generateSpawnPositions() {
+    const result = [[0, 0]]; // Player: center
+    const radius = ARENA_SIZE - 1.5;
+    for (let i = 0; i < ENEMY_FLOCK_COUNT; i++) {
+        const angle = (i / ENEMY_FLOCK_COUNT) * 2 * Math.PI;
+        result.push([
+            Math.cos(angle) * radius,
+            Math.sin(angle) * radius
+        ]);
+    }
+    return result;
+}
+const SPAWN_POSITIONS = generateSpawnPositions();
 
 // Update stride to 8 floats (32 bytes)
 const STRIDE_FLOATS = 8;
@@ -159,13 +173,15 @@ function writeBoid(data, index, packId, x, y, captureTime = 0) {
     data[base + 7] = 0; // Padding
 }
 
-// Flock CSS colors (matching shader colors)
-const FLOCK_COLORS = {
-    0: '#33ccff', // Blue (player)
-    2: '#ff5533', // Red
-    3: '#cc55ff', // Purple
-    4: '#55ff66', // Green
-};
+// Generate flock CSS color (matching shader algorithm)
+function getFlockColor(packId) {
+    if (packId === 0) return '#33ccff'; // Player - blue
+    if (packId === 1) return '#ffcc33'; // Food - yellow
+    // Enemy flocks: use same hue algorithm as shader
+    const enemyIndex = packId - 2;
+    const hue = ((0 + enemyIndex * 0.13) % 1) * 360;
+    return `hsl(${hue}, 80%, 55%)`;
+}
 
 function updateLeaderboard() {
     const countEl = document.getElementById('count');
@@ -184,7 +200,7 @@ function updateLeaderboard() {
     // Build leaderboard HTML
     let html = '<div style="text-align:left;">';
     sorted.forEach((flock, i) => {
-        const color = FLOCK_COLORS[flock.packId] || '#fff';
+        const color = getFlockColor(flock.packId);
         const isPlayer = flock.packId === 0;
         const style = `color:${color};${isPlayer ? 'font-weight:bold;' : ''}`;
         html += `<div style="${style}">${i + 1}. ${flock.name}: ${flock.count}</div>`;
