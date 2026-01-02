@@ -54,7 +54,7 @@ export class BoidsEngine {
         this.borderPipeline = null;
         this.borderParamsBuffer = null;
         this.borderBindGroup = null;
-        this.arenaSize = 4.0; // Default arena size
+        this.arenaSize = 8.0; // Arena boundary size (doubled from 4.0)
 
         // Grid resources (game mode only)
         this.gridPipeline = null;

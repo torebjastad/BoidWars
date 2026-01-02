@@ -4,7 +4,7 @@ import { BoidsEngine } from './engine.js';
 const STARTING_BOIDS = 4;
 const FOOD_COUNT = 50;
 const MAX_CAPACITY = 2000;
-const ARENA_SIZE = 4.0;
+const ARENA_SIZE = 8.0; // Doubled from 4.0
 const COLOR_FADE_DURATION = 5.0; // Seconds for captured boids to fade from yellow to blue
 
 const GAME_PARAMS = {

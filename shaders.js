@@ -85,7 +85,7 @@ fn mainCompute(@builtin(global_invocation_id) gid: vec3u) {
             instanceInfo.velocity = normalize(instanceInfo.velocity) * 0.02; 
         }
         
-        let bound = 4.0;
+        let bound = 8.0; // Arena size
         if (instanceInfo.position.x > bound) { instanceInfo.velocity.x = -abs(instanceInfo.velocity.x); }
         if (instanceInfo.position.x < -bound) { instanceInfo.velocity.x = abs(instanceInfo.velocity.x); }
         if (instanceInfo.position.y > bound) { instanceInfo.velocity.y = -abs(instanceInfo.velocity.y); }
@@ -166,7 +166,7 @@ fn mainCompute(@builtin(global_invocation_id) gid: vec3u) {
 
     // Boundary Logic
     ${isGame ? `
-    let bound = 4.0;
+    let bound = 8.0; // Arena size
     if (instanceInfo.position.x > bound) { instanceInfo.position.x = bound; instanceInfo.velocity.x *= -1.0; }
     if (instanceInfo.position.x < -bound) { instanceInfo.position.x = -bound; instanceInfo.velocity.x *= -1.0; }
     if (instanceInfo.position.y > bound) { instanceInfo.position.y = bound; instanceInfo.velocity.y *= -1.0; }
@@ -382,7 +382,7 @@ fn gridVert(@builtin(vertex_index) vi: u32) -> VertexOutput {
     );
     
     // Subtle grid color
-    let color = vec4f(0.15, 0.2, 0.25, 0.4);
+    let color = vec4f(0.2, 0.25, 0.30, 0.5);
     
     return VertexOutput(pos, color);
 }
