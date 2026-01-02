@@ -2,6 +2,7 @@
 import { BoidsEngine } from './engine.js';
 
 const STARTING_BOIDS = 4;
+const STARTING_ENEMY_BOIDS = 4;  // Enemy flock starting size
 const FOOD_COUNT = 50;
 const MAX_CAPACITY = 2000;
 const ARENA_SIZE = 8.0; // Doubled from 4.0
@@ -28,7 +29,8 @@ const canvas = document.querySelector("canvas");
 const engine = new BoidsEngine(canvas, GAME_PARAMS, [0, 0, 0], true);
 
 let playerBoids = STARTING_BOIDS;
-let totalEntities = STARTING_BOIDS + FOOD_COUNT;
+let enemyBoids = STARTING_ENEMY_BOIDS;
+let totalEntities = STARTING_BOIDS + STARTING_ENEMY_BOIDS + FOOD_COUNT;
 
 // Update stride to 8 floats (32 bytes)
 const STRIDE_FLOATS = 8;
@@ -67,7 +69,8 @@ async function initGame() {
 
 function resetGame() {
     playerBoids = STARTING_BOIDS;
-    totalEntities = playerBoids + FOOD_COUNT;
+    enemyBoids = STARTING_ENEMY_BOIDS;
+    totalEntities = playerBoids + enemyBoids + FOOD_COUNT;
 
     // Allocate buffer
     const data = new Float32Array(totalEntities * STRIDE_FLOATS);
@@ -80,9 +83,16 @@ function resetGame() {
             (Math.random() * 2 - 1) * SPAWN_RADIUS
         );
     }
+    // Enemy Flock - spawn in opposite corner (top-right)
+    for (let i = 0; i < enemyBoids; i++) {
+        writeBoid(data, playerBoids + i, 2,  // packId = 2 for enemy
+            (ARENA_SIZE - 2.0) + (Math.random() * 2 - 1) * SPAWN_RADIUS,
+            (ARENA_SIZE - 2.0) + (Math.random() * 2 - 1) * SPAWN_RADIUS
+        );
+    }
     // Food
     for (let i = 0; i < FOOD_COUNT; i++) {
-        writeBoid(data, playerBoids + i, 1,
+        writeBoid(data, playerBoids + enemyBoids + i, 1,
             (Math.random() * 2 - 1) * (ARENA_SIZE - 0.2),
             (Math.random() * 2 - 1) * (ARENA_SIZE - 0.2)
         );
@@ -105,7 +115,14 @@ function writeBoid(data, index, packId, x, y, captureTime = 0) {
 }
 
 function updateScore() {
-    document.getElementById('count').innerText = playerBoids;
+    const countEl = document.getElementById('count');
+    if (playerBoids <= 0) {
+        countEl.innerText = "GAME OVER";
+        countEl.style.color = "#ff4444";
+    } else {
+        countEl.innerText = `You: ${playerBoids} | Enemy: ${enemyBoids}`;
+        countEl.style.color = "";
+    }
 }
 
 // Convert screen coords to world coords using current camera
@@ -184,12 +201,14 @@ async function checkCollisions() {
     let changed = false;
     const players = [];
     const foods = [];
+    const enemies = [];
 
     for (let i = 0; i < totalEntities; i++) {
         const base = i * STRIDE_FLOATS;
         const packId = gpuData[base + 4];
         if (packId === 0) players.push(i);
         else if (packId === 1) foods.push(i);
+        else if (packId === 2) enemies.push(i);
     }
 
     // Update pack center target (interpolation happens in gameLoop)
@@ -199,39 +218,43 @@ async function checkCollisions() {
         const fBase = fIdx * STRIDE_FLOATS;
         const fx = gpuData[fBase + 0];
         const fy = gpuData[fBase + 1];
+        let captured = false;
 
+        // Check Player Collisions
         for (const pIdx of players) {
             const pBase = pIdx * STRIDE_FLOATS;
             const px = gpuData[pBase + 0];
             const py = gpuData[pBase + 1];
-
             const dx = fx - px;
             const dy = fy - py;
-            const distSq = dx * dx + dy * dy;
 
-            if (distSq < 0.01) {
-                gpuData[fBase + 4] = 0; // Set packId to 0 (Player)
-                gpuData[fBase + 5] = engine.params.time; // Set captureTime for color fade
-
-                // Calculate pack center for outward push
-                let centerX = 0, centerY = 0;
-                for (const pIdx of players) {
-                    const pBase = pIdx * STRIDE_FLOATS;
-                    centerX += gpuData[pBase + 0];
-                    centerY += gpuData[pBase + 1];
-                }
-                centerX /= players.length;
-                centerY /= players.length;
-
-                // Push outward from pack center to mix naturally
-                const outX = fx - centerX;
-                const outY = fy - centerY;
-                const outLen = Math.sqrt(outX * outX + outY * outY) || 1;
-                gpuData[fBase + 2] = (outX / outLen) * 0.03;
-                gpuData[fBase + 3] = (outY / outLen) * 0.03;
-
+            if (dx * dx + dy * dy < 0.01) {
+                gpuData[fBase + 4] = 0; // Set packId to Player
+                gpuData[fBase + 5] = engine.params.time;
+                pushOutward(gpuData, fBase, fx, fy, players);
                 changed = true;
+                captured = true;
                 playerBoids++;
+                break;
+            }
+        }
+
+        if (captured) continue;
+
+        // Check Enemy Collisions
+        for (const eIdx of enemies) {
+            const eBase = eIdx * STRIDE_FLOATS;
+            const ex = gpuData[eBase + 0];
+            const ey = gpuData[eBase + 1];
+            const dx = fx - ex;
+            const dy = fy - ey;
+
+            if (dx * dx + dy * dy < 0.01) {
+                gpuData[fBase + 4] = 2; // Set packId to Enemy
+                gpuData[fBase + 5] = engine.params.time;
+                pushOutward(gpuData, fBase, fx, fy, enemies);
+                changed = true;
+                enemyBoids++;
                 break;
             }
         }
@@ -253,6 +276,84 @@ async function checkCollisions() {
         engine.setTriangleData(totalEntities, biggerData);
         updateScore();
     }
+
+    // Step 2.1: Flock vs Flock Consumption (size-based)
+    const CONSUME_RATIO = 1.5; // Must be 1.5x larger to consume
+
+    // Player consumes Enemy boids
+    if (playerBoids > enemyBoids * CONSUME_RATIO) {
+        for (const eIdx of enemies) {
+            const eBase = eIdx * STRIDE_FLOATS;
+            const ex = gpuData[eBase + 0];
+            const ey = gpuData[eBase + 1];
+
+            for (const pIdx of players) {
+                const pBase = pIdx * STRIDE_FLOATS;
+                const px = gpuData[pBase + 0];
+                const py = gpuData[pBase + 1];
+                const dx = ex - px;
+                const dy = ey - py;
+
+                if (dx * dx + dy * dy < 0.02) {
+                    gpuData[eBase + 4] = 0; // Convert to Player
+                    gpuData[eBase + 5] = engine.params.time;
+                    pushOutward(gpuData, eBase, ex, ey, players);
+                    playerBoids++;
+                    enemyBoids--;
+                    engine.setTriangleData(totalEntities, gpuData);
+                    updateScore();
+                    break;
+                }
+            }
+        }
+    }
+    // Enemy consumes Player boids
+    else if (enemyBoids > playerBoids * CONSUME_RATIO) {
+        for (const pIdx of players) {
+            const pBase = pIdx * STRIDE_FLOATS;
+            const px = gpuData[pBase + 0];
+            const py = gpuData[pBase + 1];
+
+            for (const eIdx of enemies) {
+                const eBase = eIdx * STRIDE_FLOATS;
+                const ex = gpuData[eBase + 0];
+                const ey = gpuData[eBase + 1];
+                const dx = px - ex;
+                const dy = py - ey;
+
+                if (dx * dx + dy * dy < 0.02) {
+                    gpuData[pBase + 4] = 2; // Convert to Enemy
+                    gpuData[pBase + 5] = engine.params.time;
+                    pushOutward(gpuData, pBase, px, py, enemies);
+                    enemyBoids++;
+                    playerBoids--;
+                    engine.setTriangleData(totalEntities, gpuData);
+                    updateScore();
+                    break;
+                }
+            }
+        }
+    }
+}
+
+// Helper: Push captured boid outward from pack center
+function pushOutward(gpuData, boidBase, boidX, boidY, packIndices) {
+    if (packIndices.length === 0) return;
+
+    let centerX = 0, centerY = 0;
+    for (const idx of packIndices) {
+        const base = idx * STRIDE_FLOATS;
+        centerX += gpuData[base + 0];
+        centerY += gpuData[base + 1];
+    }
+    centerX /= packIndices.length;
+    centerY /= packIndices.length;
+
+    const outX = boidX - centerX;
+    const outY = boidY - centerY;
+    const outLen = Math.sqrt(outX * outX + outY * outY) || 1;
+    gpuData[boidBase + 2] = (outX / outLen) * 0.03;
+    gpuData[boidBase + 3] = (outY / outLen) * 0.03;
 }
 
 initGame();

@@ -51,7 +51,7 @@ fn mainCompute(@builtin(global_invocation_id) gid: vec3u) {
     
     // --- Food Physics (Pack 1) ---
     ${isGame ? `
-    if (instanceInfo.packId > 0.5) {
+    if (instanceInfo.packId > 0.5 && instanceInfo.packId < 1.5) {  // Only Food (packId 1)
         // Idle: small circular motion
         // Rotate velocity slightly
         let rotSpeed = 0.1;
@@ -68,8 +68,8 @@ fn mainCompute(@builtin(global_invocation_id) gid: vec3u) {
 
         for (var i = 0u; i < params.triangleCount; i++) {
             let other = currentTriangles[i];
-            // If other is Player (Pack 0)
-            if (other.packId < 0.5) { 
+            // If other is NOT Food (Player or Enemy can attract food)
+            if (instanceInfo.packId > 0.5 && instanceInfo.packId < 1.5 && (other.packId < 0.5 || other.packId > 1.5)) { 
                 let dist = distance(instanceInfo.position, other.position);
                 // Sensing radius
                 if (dist < 0.8) { 
@@ -240,11 +240,12 @@ fn mainVert(@builtin(instance_index) ii: u32, @location(0) v: vec2f) -> VertexOu
     );
 
     ${isGame ? `
-    let playerColor = vec4(0.2, 0.8, 1.0, 1.0);
-    let foodColor = vec4(1.0, 0.8, 0.2, 1.0);
+    let playerColor = vec4(0.2, 0.8, 1.0, 1.0);  // Blue
+    let foodColor = vec4(1.0, 0.8, 0.2, 1.0);    // Yellow
+    let enemyColor = vec4(1.0, 0.3, 0.2, 1.0);   // Red
     
     if (instanceInfo.packId < 0.5) {
-        // Player pack - check if recently captured
+        // Player pack (packId 0)
         if (instanceInfo.captureTime > 0.0) {
             let elapsed = params.time - instanceInfo.captureTime;
             let t = clamp(elapsed / params.colorFadeDuration, 0.0, 1.0);
@@ -252,8 +253,18 @@ fn mainVert(@builtin(instance_index) ii: u32, @location(0) v: vec2f) -> VertexOu
         } else {
             baseColor = playerColor;
         }
-    } else {
+    } else if (instanceInfo.packId < 1.5) {
+        // Food (packId 1)
         baseColor = foodColor;
+    } else {
+        // Enemy pack (packId 2+)
+        if (instanceInfo.captureTime > 0.0) {
+            let elapsed = params.time - instanceInfo.captureTime;
+            let t = clamp(elapsed / params.colorFadeDuration, 0.0, 1.0);
+            baseColor = mix(foodColor, enemyColor, t);
+        } else {
+            baseColor = enemyColor;
+        }
     }
     ` : ''}
 
