@@ -15,7 +15,7 @@ const GAME_PARAMS = {
     alignmentDistance: 0.15,    // 0.047 * 3.33
     alignmentStrength: 0.1,     // Exact from preset
     cohesionDistance: 5.0,      // 0.3 * 3.33
-    cohesionStrength: 0.002,    // Exact from preset
+    cohesionStrength: 0.001,    // Exact from preset
     triangleSize: 0.1,
     triangleCount: STARTING_BOIDS,
     colorFadeDuration: COLOR_FADE_DURATION,
@@ -36,9 +36,9 @@ let totalEntities = STARTING_BOIDS + STARTING_ENEMY_BOIDS + FOOD_COUNT;
 const STRIDE_FLOATS = 8;
 
 // Camera state
-const BASE_ZOOM = 0.5;      // Initial zoom (close view)
+const BASE_ZOOM = 0.4;      // Initial zoom (close view)
 const MIN_ZOOM = 0.15;      // Max zoomed out
-const ZOOM_EXPONENT = 0.1;  // How fast zoom changes with pack size (lower = slower zoom out)
+const ZOOM_EXPONENT = 0.15;  // How fast zoom changes with pack size (lower = slower zoom out)
 const CAMERA_SMOOTHING = 0.1; // Lower = smoother camera
 let cameraX = 0, cameraY = 0;
 let cameraZoom = BASE_ZOOM;
