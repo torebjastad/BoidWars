@@ -15,7 +15,7 @@ const GAME_PARAMS = {
     alignmentDistance: 0.15,    // 0.047 * 3.33
     alignmentStrength: 0.1,     // Exact from preset
     cohesionDistance: 5.0,      // 0.3 * 3.33
-    cohesionStrength: 0.001,    // Exact from preset
+    cohesionStrength: 0.002,    // Exact from preset
     triangleSize: 0.1,
     triangleCount: STARTING_BOIDS,
     colorFadeDuration: COLOR_FADE_DURATION,
