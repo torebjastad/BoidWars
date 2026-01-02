@@ -15,6 +15,9 @@ struct SimParams {
   time: f32,    
   clickState: u32,
   colorFadeDuration: f32,
+  // Camera Params
+  cameraPos: vec2f,
+  cameraZoom: f32,
 };
 
 struct TriangleInfo {
@@ -222,8 +225,9 @@ fn mainVert(@builtin(instance_index) ii: u32, @location(0) v: vec2f) -> VertexOu
     var pos = vec4(worldPos, 0.0, 1.0);
     
     ${isGame ? `
-    pos.x *= 0.25; 
-    pos.y *= 0.25;
+    // Camera transform: center on cameraPos and apply zoom
+    pos.x = (worldPos.x - params.cameraPos.x) * params.cameraZoom;
+    pos.y = (worldPos.y - params.cameraPos.y) * params.cameraZoom;
     ` : ''}
 
     var baseColor = vec4(

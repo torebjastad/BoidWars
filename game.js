@@ -18,6 +18,9 @@ const GAME_PARAMS = {
     triangleSize: 0.1,
     triangleCount: STARTING_BOIDS,
     colorFadeDuration: COLOR_FADE_DURATION,
+    // Camera initial values
+    cameraPos: [0, 0],
+    cameraZoom: 0.5,
 };
 
 const canvas = document.querySelector("canvas");
@@ -29,23 +32,28 @@ let totalEntities = STARTING_BOIDS + FOOD_COUNT;
 // Update stride to 8 floats (32 bytes)
 const STRIDE_FLOATS = 8;
 
+// Camera state
+const BASE_ZOOM = 0.5;      // Initial zoom (close view)
+const MIN_ZOOM = 0.15;      // Max zoomed out
+const CAMERA_SMOOTHING = 0.1; // Lower = smoother camera
+let cameraX = 0, cameraY = 0;
+let cameraZoom = BASE_ZOOM;
+let targetZoom = BASE_ZOOM;  // Target zoom for smooth interpolation
+let packCenterX = 0, packCenterY = 0;
+let lastMouseScreenX = 0.5, lastMouseScreenY = 0.5; // Normalized screen coords
+
 async function initGame() {
     const success = await engine.init();
     if (!success) return;
 
     resetGame();
 
-    // Hook Input
+    // Hook Input - store normalized screen coords, convert to world in gameLoop
     canvas.addEventListener('mousemove', e => {
         const rect = canvas.getBoundingClientRect();
-        let nx = (e.clientX - rect.left) / rect.width;
-        let ny = (e.clientY - rect.top) / rect.height;
-
-        // Map 0 -> -4, 1 -> 4.
-        let worldX = (nx * 2 - 1) * ARENA_SIZE;
-        let worldY = -(ny * 2 - 1) * ARENA_SIZE;
-
-        engine.setParams({ mousePos: [worldX, worldY] });
+        lastMouseScreenX = (e.clientX - rect.left) / rect.width;
+        lastMouseScreenY = (e.clientY - rect.top) / rect.height;
+        updateMouseWorldPos();
     });
 
     document.getElementById('start-btn').addEventListener('click', () => {
@@ -98,11 +106,62 @@ function updateScore() {
     document.getElementById('count').innerText = playerBoids;
 }
 
+// Convert screen coords to world coords using current camera
+function updateMouseWorldPos() {
+    // Screen normalized -> NDC (-1 to 1) -> World (accounting for camera)
+    const ndcX = (lastMouseScreenX * 2 - 1);
+    const ndcY = -(lastMouseScreenY * 2 - 1);
+
+    // Convert from screen to world: reverse the camera transform
+    const worldX = ndcX / cameraZoom + cameraX;
+    const worldY = ndcY / cameraZoom + cameraY;
+
+    engine.setParams({ mousePos: [worldX, worldY] });
+}
+
+// Update camera based on pack center and size
+function updatePackCenter(gpuData, playerIndices) {
+    if (playerIndices.length === 0) return;
+
+    // Calculate pack center
+    let sumX = 0, sumY = 0;
+    for (const idx of playerIndices) {
+        const base = idx * STRIDE_FLOATS;
+        sumX += gpuData[base + 0];
+        sumY += gpuData[base + 1];
+    }
+    packCenterX = sumX / playerIndices.length;
+    packCenterY = sumY / playerIndices.length;
+
+    // Calculate target zoom based on pack size
+    targetZoom = Math.max(MIN_ZOOM, BASE_ZOOM / Math.sqrt(playerBoids));
+}
+
+// Smooth camera interpolation - called every frame for smoothness
+function smoothCameraUpdate() {
+    // Smooth camera movement (lerp)
+    cameraX += (packCenterX - cameraX) * CAMERA_SMOOTHING;
+    cameraY += (packCenterY - cameraY) * CAMERA_SMOOTHING;
+    cameraZoom += (targetZoom - cameraZoom) * CAMERA_SMOOTHING;
+
+    // Update engine params
+    engine.setParams({
+        cameraPos: [cameraX, cameraY],
+        cameraZoom: cameraZoom
+    });
+
+    // Also update mouse world position since camera moved
+    updateMouseWorldPos();
+}
+
 let lastCheck = 0;
 const CHECK_INTERVAL = 100;
 
 function gameLoop() {
     if (!engine.isRunning) return;
+
+    // Update camera smoothly every frame
+    smoothCameraUpdate();
 
     const now = performance.now();
     if (now - lastCheck > CHECK_INTERVAL) {
@@ -127,6 +186,9 @@ async function checkCollisions() {
         if (packId === 0) players.push(i);
         else if (packId === 1) foods.push(i);
     }
+
+    // Update pack center target (interpolation happens in gameLoop)
+    updatePackCenter(gpuData, players);
 
     for (const fIdx of foods) {
         const fBase = fIdx * STRIDE_FLOATS;

@@ -7,8 +7,11 @@ import { getComputeWGSL, getRenderWGSL } from './shaders.js';
 // mousePos (32) (vec2f)
 // gameMode (40) (u32)
 // time (44) (f32)
-// padding/camera? (48)
-export const PARAMS_SIZE_BYTES = 64; // Bumped size for safety/alignment
+// clickState (48) (u32)
+// colorFadeDuration (52) (f32)
+// cameraPos (56) (vec2f)
+// cameraZoom (64) (f32)
+export const PARAMS_SIZE_BYTES = 80; // Increased for camera params
 
 export class BoidsEngine {
     constructor(canvas, initialParams, initialColor, isGame = false) {
@@ -265,6 +268,11 @@ export class BoidsEngine {
         view.setFloat32(44, (performance.now() - this.startTime) / 1000.0, true); // Time
         view.setUint32(48, p.clickState, true); // Click State
         view.setFloat32(52, p.colorFadeDuration || 5.0, true); // Color Fade Duration
+        // Camera params
+        const camPos = p.cameraPos || [0, 0];
+        view.setFloat32(56, camPos[0], true);
+        view.setFloat32(60, camPos[1], true);
+        view.setFloat32(64, p.cameraZoom || 0.25, true);
 
         this.device.queue.writeBuffer(this.paramsBuffer, 0, data);
     }
