@@ -1,19 +1,20 @@
 
 import { BoidsEngine } from './engine.js';
 
-const STARTING_BOIDS = 4;
-const FOOD_COUNT = 30;
+const STARTING_BOIDS = 50;
+const FOOD_COUNT = 300;
 const MAX_CAPACITY = 2000;
 const ARENA_SIZE = 4.0;
 
 const GAME_PARAMS = {
-    separationDistance: 0.15,
-    separationStrength: 0.05,
-    alignmentDistance: 0.2,
-    alignmentStrength: 0.05,
-    cohesionDistance: 0.3,
-    cohesionStrength: 0.02,
-    triangleSize: 0.1, // Increased from 0.06 for better visibility
+    // Blob Preset (Scaled x3.33 for size 0.1)
+    separationDistance: 0.11,   // 0.033 * 3.33
+    separationStrength: 0.051,  // Exact from preset
+    alignmentDistance: 0.15,    // 0.047 * 3.33
+    alignmentStrength: 0.1,     // Exact from preset
+    cohesionDistance: 5.0,      // 0.3 * 3.33
+    cohesionStrength: 0.009,    // Exact from preset
+    triangleSize: 0.1,
     triangleCount: STARTING_BOIDS,
 };
 
@@ -61,7 +62,10 @@ function resetGame() {
 
     // Player
     for (let i = 0; i < playerBoids; i++) {
-        writeBoid(data, i, 0, (Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 0.5);
+        writeBoid(data, i, 0,
+            (Math.random() * 2 - 1) * (ARENA_SIZE - 0.2),
+            (Math.random() * 2 - 1) * (ARENA_SIZE - 0.2)
+        );
     }
     // Food
     for (let i = 0; i < FOOD_COUNT; i++) {
@@ -136,7 +140,13 @@ async function checkCollisions() {
             const distSq = dx * dx + dy * dy;
 
             if (distSq < 0.01) {
-                gpuData[fBase + 4] = 0;
+                gpuData[fBase + 4] = 0; // Set packId to 0 (Player)
+
+                // CRITICAL FIX: Randomize velocity to break the "inward attraction" momentum.
+                // Otherwise they keep diving to the center and get trapped.
+                gpuData[fBase + 2] = (Math.random() - 0.5) * 0.05;
+                gpuData[fBase + 3] = (Math.random() - 0.5) * 0.05;
+
                 changed = true;
                 playerBoids++;
                 break;

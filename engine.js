@@ -16,9 +16,17 @@ export class BoidsEngine {
         this.params = {
             gameMode: isGame ? 1 : 0,
             mousePos: [0, 0],
+            clickState: 0, // 0 = up, 1 = down
             time: 0,
             ...initialParams
         };
+
+        // Add listeners
+        window.addEventListener('mousedown', () => { this.params.clickState = 1; this.updateParamsBuffer(); });
+        window.addEventListener('mouseup', () => { this.params.clickState = 0; this.updateParamsBuffer(); });
+        // Touch support
+        window.addEventListener('touchstart', () => { this.params.clickState = 1; this.updateParamsBuffer(); });
+        window.addEventListener('touchend', () => { this.params.clickState = 0; this.updateParamsBuffer(); });
         this.color = [...initialColor];
         this.isGame = isGame;
 
@@ -110,7 +118,10 @@ export class BoidsEngine {
                     console.log(`Render Shader: ${msg.message} (Line ${msg.lineNum})`);
                     if (msg.type === 'error') hasError = true;
                 }
-                if (hasError) alert("Render shader compilation failed! Open console.");
+                if (hasError) {
+                    const errorMsg = info.messages.find(m => m.type === 'error')?.message || "Unknown error";
+                    alert(`Render Shader Error: ${errorMsg}`);
+                }
             }
         });
 
@@ -252,6 +263,7 @@ export class BoidsEngine {
         }
         view.setUint32(40, p.gameMode || 0, true);
         view.setFloat32(44, (performance.now() - this.startTime) / 1000.0, true); // Time
+        view.setUint32(48, p.clickState, true); // Click State
 
         this.device.queue.writeBuffer(this.paramsBuffer, 0, data);
     }

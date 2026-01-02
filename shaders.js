@@ -13,7 +13,7 @@ struct SimParams {
   mousePos: vec2f,
   gameMode: u32, 
   time: f32,    
-  padding: f32,
+  clickState: u32,
 };
 
 struct TriangleInfo {
@@ -46,8 +46,39 @@ fn mainCompute(@builtin(global_invocation_id) gid: vec3u) {
     // --- Food Physics (Pack 1) ---
     ${isGame ? `
     if (instanceInfo.packId > 0.5) {
-        // Just drift slowly
-        instanceInfo.velocity = normalize(instanceInfo.velocity) * 0.002;
+        // Idle: small circular motion
+        // Rotate velocity slightly
+        let rotSpeed = 0.1;
+        let c = cos(rotSpeed);
+        let s = sin(rotSpeed);
+        let oldV = instanceInfo.velocity;
+        instanceInfo.velocity.x = oldV.x * c - oldV.y * s;
+        instanceInfo.velocity.y = oldV.x * s + oldV.y * c;
+        instanceInfo.velocity = normalize(instanceInfo.velocity) * 0.005; // Base drift speed
+
+        // Attraction to Player Pack (Pack 0)
+        var attraction = vec2(0.0, 0.0);
+        var closePlayers = 0u;
+
+        for (var i = 0u; i < params.triangleCount; i++) {
+            let other = currentTriangles[i];
+            // If other is Player (Pack 0)
+            if (other.packId < 0.5) { 
+                let dist = distance(instanceInfo.position, other.position);
+                // Sensing radius
+                if (dist < 0.8) { 
+                    attraction += other.position - instanceInfo.position;
+                    closePlayers++;
+                }
+            }
+        }
+
+        if (closePlayers > 0u) {
+            // Strong pull towards player
+            instanceInfo.velocity += normalize(attraction) * 0.05;
+            // Match Player Speed (0.02)
+            instanceInfo.velocity = normalize(instanceInfo.velocity) * 0.02; 
+        }
         
         let bound = 4.0;
         if (instanceInfo.position.x > bound) { instanceInfo.velocity.x = -abs(instanceInfo.velocity.x); }
@@ -108,10 +139,17 @@ fn mainCompute(@builtin(global_invocation_id) gid: vec3u) {
     if (params.gameMode == 1u && myPack < 0.5) {
         let targetPos = params.mousePos; 
         
+        // Mouse Attraction
         let mouseDir = targetPos - instanceInfo.position;
         let distToMouse = length(mouseDir);
-        if (distToMouse > 0.05) { 
-            force += normalize(mouseDir) * 0.03; 
+        
+        // Gentle steering towards mouse ONLY IF CLICKED
+        // params.clickState == 1
+        if (params.clickState == 1u) {
+             if (distToMouse > 0.05) { 
+                // Stronger pull when active
+                force += normalize(mouseDir) * 0.02; 
+            }
         }
     }
     ` : ''}
@@ -174,13 +212,8 @@ fn mainVert(@builtin(instance_index) ii: u32, @location(0) v: vec2f) -> VertexOu
     let instanceInfo = currentTriangles[ii];
     let angle = getRotationFromVelocity(instanceInfo.velocity);
     
-    // Pulse food size
+    // No pulsing, constant size
     var scale = 1.0;
-    ${isGame ? `
-    if (instanceInfo.packId > 0.5) {
-        scale = 1.0 + 0.3 * sin(params.time * 5.0 + f32(ii));
-    }
-    ` : ''}
     
     let rotated = rotate(v * scale, angle);
     let worldPos = instanceInfo.position + rotated;
