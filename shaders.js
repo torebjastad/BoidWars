@@ -18,6 +18,7 @@ struct SimParams {
   // Camera Params
   cameraPos: vec2f,
   cameraZoom: f32,
+  aspectRatio: f32, // width / height
 };
 
 struct TriangleInfo {
@@ -225,8 +226,8 @@ fn mainVert(@builtin(instance_index) ii: u32, @location(0) v: vec2f) -> VertexOu
     var pos = vec4(worldPos, 0.0, 1.0);
     
     ${isGame ? `
-    // Camera transform: center on cameraPos and apply zoom
-    pos.x = (worldPos.x - params.cameraPos.x) * params.cameraZoom;
+    // Camera transform: center on cameraPos, apply zoom, correct aspect ratio
+    pos.x = (worldPos.x - params.cameraPos.x) * params.cameraZoom / params.aspectRatio;
     pos.y = (worldPos.y - params.cameraPos.y) * params.cameraZoom;
     ` : ''}
 
@@ -264,6 +265,133 @@ fn mainFrag(@location(0) color: vec4f, @location(1) uv: vec2f, @location(2) worl
 }
 `;
 };
+
+// Arena border shader - draws the arena boundary as thick walls
+export const getArenaBorderWGSL = () => /* wgsl */`
+struct BorderParams {
+  cameraPos: vec2f,
+  cameraZoom: f32,
+  arenaSize: f32,
+  borderThickness: f32,
+  aspectRatio: f32,
+};
+
+@group(0) @binding(0) var<uniform> params: BorderParams;
+
+struct VertexOutput {
+    @builtin(position) position: vec4f,
+    @location(0) color: vec4f,
+};
+
+@vertex
+fn borderVert(@builtin(vertex_index) vi: u32) -> VertexOutput {
+    let arena = params.arenaSize;
+    let t = params.borderThickness;
+    
+    // 24 vertices for 4 wall quads (6 vertices per quad, 2 triangles each)
+    // Each wall is a rectangle from the arena edge outward
+    var vertices = array<vec2f, 24>(
+        // Bottom wall (2 triangles)
+        vec2f(-arena - t, -arena - t), vec2f( arena + t, -arena - t), vec2f( arena + t, -arena),
+        vec2f(-arena - t, -arena - t), vec2f( arena + t, -arena),     vec2f(-arena - t, -arena),
+        // Top wall
+        vec2f(-arena - t,  arena),     vec2f( arena + t,  arena),     vec2f( arena + t,  arena + t),
+        vec2f(-arena - t,  arena),     vec2f( arena + t,  arena + t), vec2f(-arena - t,  arena + t),
+        // Left wall
+        vec2f(-arena - t, -arena),     vec2f(-arena, -arena),         vec2f(-arena,  arena),
+        vec2f(-arena - t, -arena),     vec2f(-arena,  arena),         vec2f(-arena - t,  arena),
+        // Right wall
+        vec2f( arena, -arena),         vec2f( arena + t, -arena),     vec2f( arena + t,  arena),
+        vec2f( arena, -arena),         vec2f( arena + t,  arena),     vec2f( arena,  arena)
+    );
+    
+    let worldPos = vertices[vi];
+    
+    // Apply camera transform with aspect ratio correction
+    var pos = vec4f(
+        (worldPos.x - params.cameraPos.x) * params.cameraZoom / params.aspectRatio,
+        (worldPos.y - params.cameraPos.y) * params.cameraZoom,
+        0.0,
+        1.0
+    );
+    
+    // Glowing wall color
+    let color = vec4f(0.2, 0.5, 0.7, 0.9);
+    
+    return VertexOutput(pos, color);
+}
+
+@fragment
+fn borderFrag(@location(0) color: vec4f) -> @location(0) vec4f {
+    return color;
+}
+`;
+
+// Arena grid shader - draws grid lines in world coordinates
+export const getArenaGridWGSL = () => /* wgsl */`
+struct GridParams {
+  cameraPos: vec2f,
+  cameraZoom: f32,
+  arenaSize: f32,
+  gridSpacing: f32,
+  aspectRatio: f32,
+};
+
+@group(0) @binding(0) var<uniform> params: GridParams;
+
+struct VertexOutput {
+    @builtin(position) position: vec4f,
+    @location(0) color: vec4f,
+};
+
+@vertex
+fn gridVert(@builtin(vertex_index) vi: u32) -> VertexOutput {
+    let arena = params.arenaSize;
+    let spacing = params.gridSpacing;
+    
+    // Calculate grid line count (how many lines in each direction)
+    let lineCount = u32(arena * 2.0 / spacing) + 1u;
+    
+    // Determine if this is a horizontal or vertical line
+    let totalHorizontalVerts = lineCount * 2u;
+    let isVertical = vi >= totalHorizontalVerts;
+    
+    var worldPos: vec2f;
+    
+    if (!isVertical) {
+        // Horizontal lines
+        let lineIdx = vi / 2u;
+        let isEnd = (vi % 2u) == 1u;
+        let y = -arena + f32(lineIdx) * spacing;
+        worldPos = vec2f(select(-arena, arena, isEnd), y);
+    } else {
+        // Vertical lines
+        let adjustedVi = vi - totalHorizontalVerts;
+        let lineIdx = adjustedVi / 2u;
+        let isEnd = (adjustedVi % 2u) == 1u;
+        let x = -arena + f32(lineIdx) * spacing;
+        worldPos = vec2f(x, select(-arena, arena, isEnd));
+    }
+    
+    // Apply camera transform with aspect ratio correction
+    var pos = vec4f(
+        (worldPos.x - params.cameraPos.x) * params.cameraZoom / params.aspectRatio,
+        (worldPos.y - params.cameraPos.y) * params.cameraZoom,
+        0.0,
+        1.0
+    );
+    
+    // Subtle grid color
+    let color = vec4f(0.15, 0.2, 0.25, 0.4);
+    
+    return VertexOutput(pos, color);
+}
+
+@fragment
+fn gridFrag(@location(0) color: vec4f) -> @location(0) vec4f {
+    return color;
+}
+`;
 
 // Backwards compatibility for Sim
 export const computeWGSL = getComputeWGSL(false);

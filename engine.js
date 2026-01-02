@@ -1,5 +1,5 @@
 
-import { getComputeWGSL, getRenderWGSL } from './shaders.js';
+import { getComputeWGSL, getRenderWGSL, getArenaBorderWGSL, getArenaGridWGSL } from './shaders.js';
 
 // Struct Layout:
 // ...
@@ -11,7 +11,8 @@ import { getComputeWGSL, getRenderWGSL } from './shaders.js';
 // colorFadeDuration (52) (f32)
 // cameraPos (56) (vec2f)
 // cameraZoom (64) (f32)
-export const PARAMS_SIZE_BYTES = 80; // Increased for camera params
+// aspectRatio (68) (f32)
+export const PARAMS_SIZE_BYTES = 80; // Includes camera and aspect ratio params
 
 export class BoidsEngine {
     constructor(canvas, initialParams, initialColor, isGame = false) {
@@ -48,6 +49,18 @@ export class BoidsEngine {
         this.triangleBufferB = null;
         this.bindGroupA = null;
         this.bindGroupB = null;
+
+        // Border resources (game mode only)
+        this.borderPipeline = null;
+        this.borderParamsBuffer = null;
+        this.borderBindGroup = null;
+        this.arenaSize = 4.0; // Default arena size
+
+        // Grid resources (game mode only)
+        this.gridPipeline = null;
+        this.gridParamsBuffer = null;
+        this.gridBindGroup = null;
+        this.gridSpacing = 1.0; // Grid line spacing in world units
 
         this.frameCount = 0;
         this.startTime = performance.now();
@@ -183,6 +196,98 @@ export class BoidsEngine {
 
         this.initTriangleBuffers(this.params.triangleCount);
         this.createBindGroups();
+
+        // Create arena border pipeline (game mode only)
+        if (this.isGame) {
+            const borderModule = device.createShaderModule({ code: getArenaBorderWGSL() });
+
+            // Border params buffer: cameraPos (vec2f), cameraZoom (f32), arenaSize (f32), borderThickness (f32), aspectRatio (f32)
+            this.borderParamsBuffer = device.createBuffer({
+                size: 32, // 6 floats = 24 bytes, rounded to 32 for alignment
+                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            });
+
+            const borderBindGroupLayout = device.createBindGroupLayout({
+                entries: [{
+                    binding: 0,
+                    visibility: GPUShaderStage.VERTEX,
+                    buffer: { type: "uniform" }
+                }]
+            });
+
+            this.borderPipeline = device.createRenderPipeline({
+                layout: device.createPipelineLayout({ bindGroupLayouts: [borderBindGroupLayout] }),
+                vertex: {
+                    module: borderModule,
+                    entryPoint: "borderVert",
+                },
+                fragment: {
+                    module: borderModule,
+                    entryPoint: "borderFrag",
+                    targets: [{
+                        format: this.presentationFormat,
+                        blend: {
+                            color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha" },
+                            alpha: { srcFactor: "one", dstFactor: "one" }
+                        }
+                    }]
+                },
+                primitive: { topology: "triangle-list" }
+            });
+
+            this.borderBindGroup = device.createBindGroup({
+                layout: borderBindGroupLayout,
+                entries: [{
+                    binding: 0,
+                    resource: { buffer: this.borderParamsBuffer }
+                }]
+            });
+
+            // Create grid pipeline
+            const gridModule = device.createShaderModule({ code: getArenaGridWGSL() });
+
+            // Grid params buffer: cameraPos (vec2f), cameraZoom (f32), arenaSize (f32), gridSpacing (f32), aspectRatio (f32)
+            this.gridParamsBuffer = device.createBuffer({
+                size: 32, // 6 floats = 24 bytes, rounded to 32
+                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            });
+
+            const gridBindGroupLayout = device.createBindGroupLayout({
+                entries: [{
+                    binding: 0,
+                    visibility: GPUShaderStage.VERTEX,
+                    buffer: { type: "uniform" }
+                }]
+            });
+
+            this.gridPipeline = device.createRenderPipeline({
+                layout: device.createPipelineLayout({ bindGroupLayouts: [gridBindGroupLayout] }),
+                vertex: {
+                    module: gridModule,
+                    entryPoint: "gridVert",
+                },
+                fragment: {
+                    module: gridModule,
+                    entryPoint: "gridFrag",
+                    targets: [{
+                        format: this.presentationFormat,
+                        blend: {
+                            color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha" },
+                            alpha: { srcFactor: "one", dstFactor: "one" }
+                        }
+                    }]
+                },
+                primitive: { topology: "line-list" }
+            });
+
+            this.gridBindGroup = device.createBindGroup({
+                layout: gridBindGroupLayout,
+                entries: [{
+                    binding: 0,
+                    resource: { buffer: this.gridParamsBuffer }
+                }]
+            });
+        }
     }
 
     initTriangleBuffers(count, initialDataArray = null) {
@@ -273,6 +378,9 @@ export class BoidsEngine {
         view.setFloat32(56, camPos[0], true);
         view.setFloat32(60, camPos[1], true);
         view.setFloat32(64, p.cameraZoom || 0.25, true);
+        // Aspect ratio (width / height)
+        const aspectRatio = this.canvas.width / this.canvas.height;
+        view.setFloat32(68, aspectRatio, true);
 
         this.device.queue.writeBuffer(this.paramsBuffer, 0, data);
     }
@@ -368,8 +476,51 @@ export class BoidsEngine {
 
         const renderBindGroup = useBindGroupA ? this.bindGroupB : this.bindGroupA;
 
+        // Draw arena grid first (so boids render on top)
+        if (this.isGame && this.gridPipeline) {
+            const camPos = this.params.cameraPos || [0, 0];
+            const aspectRatio = this.canvas.width / this.canvas.height;
+            const gridData = new Float32Array([
+                camPos[0], camPos[1],
+                this.params.cameraZoom || 0.25,
+                this.arenaSize,
+                this.gridSpacing,
+                aspectRatio
+            ]);
+            this.device.queue.writeBuffer(this.gridParamsBuffer, 0, gridData);
+
+            renderPass.setPipeline(this.gridPipeline);
+            renderPass.setBindGroup(0, this.gridBindGroup);
+
+            // Calculate vertex count: (lineCount * 2) for horizontal + (lineCount * 2) for vertical
+            const lineCount = Math.floor(this.arenaSize * 2 / this.gridSpacing) + 1;
+            renderPass.draw(lineCount * 2 * 2); // horizontal + vertical lines
+        }
+        // Draw boids (need to re-set pipeline after grid)
+        renderPass.setPipeline(this.renderPipeline);
         renderPass.setBindGroup(0, renderBindGroup);
         renderPass.draw(3, this.params.triangleCount);
+
+        // Draw arena border (game mode only)
+        if (this.isGame && this.borderPipeline) {
+            // Update border params buffer
+            const camPos = this.params.cameraPos || [0, 0];
+            const borderThickness = 0.15; // Wall thickness in world units
+            const aspectRatio = this.canvas.width / this.canvas.height;
+            const borderData = new Float32Array([
+                camPos[0], camPos[1],
+                this.params.cameraZoom || 0.25,
+                this.arenaSize,
+                borderThickness,
+                aspectRatio
+            ]);
+            this.device.queue.writeBuffer(this.borderParamsBuffer, 0, borderData);
+
+            renderPass.setPipeline(this.borderPipeline);
+            renderPass.setBindGroup(0, this.borderBindGroup);
+            renderPass.draw(24); // 24 vertices for 4 wall quads
+        }
+
         renderPass.end();
 
         this.device.queue.submit([commandEncoder.finish()]);

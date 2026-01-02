@@ -108,12 +108,15 @@ function updateScore() {
 
 // Convert screen coords to world coords using current camera
 function updateMouseWorldPos() {
-    // Screen normalized -> NDC (-1 to 1) -> World (accounting for camera)
+    // Screen normalized -> NDC (-1 to 1) -> World (accounting for camera and aspect ratio)
+    const aspectRatio = canvas.width / canvas.height;
     const ndcX = (lastMouseScreenX * 2 - 1);
     const ndcY = -(lastMouseScreenY * 2 - 1);
 
     // Convert from screen to world: reverse the camera transform
-    const worldX = ndcX / cameraZoom + cameraX;
+    // Shader does: pos.x = (worldPos.x - cameraX) * zoom / aspectRatio
+    // So: worldX = ndcX * aspectRatio / zoom + cameraX
+    const worldX = ndcX * aspectRatio / cameraZoom + cameraX;
     const worldY = ndcY / cameraZoom + cameraY;
 
     engine.setParams({ mousePos: [worldX, worldY] });
