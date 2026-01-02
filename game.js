@@ -1,7 +1,7 @@
 
 import { BoidsEngine } from './engine.js';
 
-const STARTING_BOIDS = 50;
+const STARTING_BOIDS = 10;
 const FOOD_COUNT = 300;
 const MAX_CAPACITY = 2000;
 const ARENA_SIZE = 4.0;
@@ -60,11 +60,12 @@ function resetGame() {
     // Allocate buffer
     const data = new Float32Array(totalEntities * STRIDE_FLOATS);
 
-    // Player
+    // Player - spawn concentrated in center
+    const SPAWN_RADIUS = 0.5;
     for (let i = 0; i < playerBoids; i++) {
         writeBoid(data, i, 0,
-            (Math.random() * 2 - 1) * (ARENA_SIZE - 0.2),
-            (Math.random() * 2 - 1) * (ARENA_SIZE - 0.2)
+            (Math.random() * 2 - 1) * SPAWN_RADIUS,
+            (Math.random() * 2 - 1) * SPAWN_RADIUS
         );
     }
     // Food
@@ -142,10 +143,22 @@ async function checkCollisions() {
             if (distSq < 0.01) {
                 gpuData[fBase + 4] = 0; // Set packId to 0 (Player)
 
-                // CRITICAL FIX: Randomize velocity to break the "inward attraction" momentum.
-                // Otherwise they keep diving to the center and get trapped.
-                gpuData[fBase + 2] = (Math.random() - 0.5) * 0.05;
-                gpuData[fBase + 3] = (Math.random() - 0.5) * 0.05;
+                // Calculate pack center for outward push
+                let centerX = 0, centerY = 0;
+                for (const pIdx of players) {
+                    const pBase = pIdx * STRIDE_FLOATS;
+                    centerX += gpuData[pBase + 0];
+                    centerY += gpuData[pBase + 1];
+                }
+                centerX /= players.length;
+                centerY /= players.length;
+
+                // Push outward from pack center to mix naturally
+                const outX = fx - centerX;
+                const outY = fy - centerY;
+                const outLen = Math.sqrt(outX * outX + outY * outY) || 1;
+                gpuData[fBase + 2] = (outX / outLen) * 0.03;
+                gpuData[fBase + 3] = (outY / outLen) * 0.03;
 
                 changed = true;
                 playerBoids++;

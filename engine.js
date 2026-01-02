@@ -212,11 +212,11 @@ export class BoidsEngine {
 
         this.triangleBufferA = this.device.createBuffer({
             size: byteSize,
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
         });
         this.triangleBufferB = this.device.createBuffer({
             size: byteSize,
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
         });
 
         this.device.queue.writeBuffer(this.triangleBufferA, 0, data);
