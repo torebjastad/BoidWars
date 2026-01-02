@@ -240,17 +240,24 @@ fn mainVert(@builtin(instance_index) ii: u32, @location(0) v: vec2f) -> VertexOu
     );
 
     ${isGame ? `
-    let playerColor = vec4(0.2, 0.8, 1.0, 1.0);  // Blue
-    let foodColor = vec4(1.0, 0.8, 0.2, 1.0);    // Yellow
-    let enemyColor = vec4(1.0, 0.3, 0.2, 1.0);   // Red
+    let playerColor = vec4(0.2, 0.8, 1.0, 1.0);  // Blue (packId 0)
+    let foodColor = vec4(1.0, 0.8, 0.2, 1.0);    // Yellow (packId 1)
+    let enemy1Color = vec4(1.0, 0.3, 0.2, 1.0);  // Red (packId 2)
+    let enemy2Color = vec4(0.8, 0.3, 1.0, 1.0);  // Purple (packId 3)
+    let enemy3Color = vec4(0.3, 1.0, 0.4, 1.0);  // Green (packId 4)
     
-    // Determine "from" color based on prevPackId
+    // Get target color based on current packId
+    var targetColor = playerColor;
+    if (instanceInfo.packId > 1.5 && instanceInfo.packId < 2.5) { targetColor = enemy1Color; }
+    else if (instanceInfo.packId > 2.5 && instanceInfo.packId < 3.5) { targetColor = enemy2Color; }
+    else if (instanceInfo.packId > 3.5) { targetColor = enemy3Color; }
+    
+    // Get "from" color based on prevPackId
     var fromColor = foodColor;
-    if (instanceInfo.prevPackId < 0.5) {
-        fromColor = playerColor;
-    } else if (instanceInfo.prevPackId > 1.5) {
-        fromColor = enemyColor;
-    }
+    if (instanceInfo.prevPackId < 0.5) { fromColor = playerColor; }
+    else if (instanceInfo.prevPackId > 1.5 && instanceInfo.prevPackId < 2.5) { fromColor = enemy1Color; }
+    else if (instanceInfo.prevPackId > 2.5 && instanceInfo.prevPackId < 3.5) { fromColor = enemy2Color; }
+    else if (instanceInfo.prevPackId > 3.5) { fromColor = enemy3Color; }
     
     if (instanceInfo.packId < 0.5) {
         // Player pack (packId 0)
@@ -269,9 +276,9 @@ fn mainVert(@builtin(instance_index) ii: u32, @location(0) v: vec2f) -> VertexOu
         if (instanceInfo.captureTime > 0.0) {
             let elapsed = params.time - instanceInfo.captureTime;
             let t = clamp(elapsed / params.colorFadeDuration, 0.0, 1.0);
-            baseColor = mix(fromColor, enemyColor, t);
+            baseColor = mix(fromColor, targetColor, t);
         } else {
-            baseColor = enemyColor;
+            baseColor = targetColor;
         }
     }
     ` : ''}

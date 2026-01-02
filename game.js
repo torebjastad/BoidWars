@@ -2,11 +2,36 @@
 import { BoidsEngine } from './engine.js';
 
 const STARTING_BOIDS = 4;
-const STARTING_ENEMY_BOIDS = 4;  // Enemy flock starting size
+const STARTING_ENEMY_BOIDS = 4;  // Each enemy flock starting size
+const ENEMY_FLOCK_COUNT = 3;     // Number of enemy flocks
 const FOOD_COUNT = 50;
 const MAX_CAPACITY = 2000;
-const ARENA_SIZE = 4.0; // Doubled from 4.0
-const COLOR_FADE_DURATION = 4.0; // Seconds for captured boids to fade
+const ARENA_SIZE = 8.0;
+const COLOR_FADE_DURATION = 4.0;
+
+// Flock names pool (20 names for future expansion)
+const FLOCK_NAMES = [
+    "You",           // 0 - Player (always first)
+    "Crimson Tide",  // 2
+    "Shadow Legion", // 3
+    "Venom Swarm",   // 4
+    "Frost Fangs",
+    "Thunder Hawks",
+    "Ember Wolves",
+    "Void Hunters",
+    "Storm Riders",
+    "Iron Talons",
+    "Night Crawlers",
+    "Blaze Runners",
+    "Phantom Flock",
+    "Apex Predators",
+    "Omega Squad",
+    "Neon Vipers",
+    "Chaos Swarm",
+    "Glacier Pack",
+    "Solar Flares",
+    "Dark Matter"
+];
 
 const GAME_PARAMS = {
     // Blob Preset (Scaled x3.33 for size 0.1)
@@ -29,8 +54,22 @@ const canvas = document.querySelector("canvas");
 const engine = new BoidsEngine(canvas, GAME_PARAMS, [0, 0, 0], true);
 
 let playerBoids = STARTING_BOIDS;
-let enemyBoids = STARTING_ENEMY_BOIDS;
-let totalEntities = STARTING_BOIDS + STARTING_ENEMY_BOIDS + FOOD_COUNT;
+// Flocks array: [{ packId, count, name }]
+let flocks = [
+    { packId: 0, count: STARTING_BOIDS, name: FLOCK_NAMES[0] },  // Player
+    { packId: 2, count: STARTING_ENEMY_BOIDS, name: FLOCK_NAMES[1] },
+    { packId: 3, count: STARTING_ENEMY_BOIDS, name: FLOCK_NAMES[2] },
+    { packId: 4, count: STARTING_ENEMY_BOIDS, name: FLOCK_NAMES[3] },
+];
+let totalEntities = STARTING_BOIDS + (STARTING_ENEMY_BOIDS * ENEMY_FLOCK_COUNT) + FOOD_COUNT;
+
+// Spawn positions for each flock (corners)
+const SPAWN_POSITIONS = [
+    [0, 0],                           // Player: center
+    [ARENA_SIZE - 1.5, ARENA_SIZE - 1.5],   // Flock 2: top-right
+    [-ARENA_SIZE + 1.5, ARENA_SIZE - 1.5],  // Flock 3: top-left
+    [-ARENA_SIZE + 1.5, -ARENA_SIZE + 1.5], // Flock 4: bottom-left
+];
 
 // Update stride to 8 floats (32 bytes)
 const STRIDE_FLOATS = 8;
@@ -68,38 +107,44 @@ async function initGame() {
 }
 
 function resetGame() {
+    // Reset flock counts
+    flocks[0].count = STARTING_BOIDS;
+    for (let i = 1; i < flocks.length; i++) {
+        flocks[i].count = STARTING_ENEMY_BOIDS;
+    }
     playerBoids = STARTING_BOIDS;
-    enemyBoids = STARTING_ENEMY_BOIDS;
-    totalEntities = playerBoids + enemyBoids + FOOD_COUNT;
 
-    // Allocate buffer
+    const totalFlockBoids = STARTING_BOIDS + (STARTING_ENEMY_BOIDS * ENEMY_FLOCK_COUNT);
+    totalEntities = totalFlockBoids + FOOD_COUNT;
+
     const data = new Float32Array(totalEntities * STRIDE_FLOATS);
-
-    // Player - spawn concentrated in center
     const SPAWN_RADIUS = 0.5;
-    for (let i = 0; i < playerBoids; i++) {
-        writeBoid(data, i, 0,
-            (Math.random() * 2 - 1) * SPAWN_RADIUS,
-            (Math.random() * 2 - 1) * SPAWN_RADIUS
-        );
+    let boidIndex = 0;
+
+    // Spawn each flock
+    for (let f = 0; f < flocks.length; f++) {
+        const flock = flocks[f];
+        const [spawnX, spawnY] = SPAWN_POSITIONS[f];
+
+        for (let i = 0; i < flock.count; i++) {
+            writeBoid(data, boidIndex, flock.packId,
+                spawnX + (Math.random() * 2 - 1) * SPAWN_RADIUS,
+                spawnY + (Math.random() * 2 - 1) * SPAWN_RADIUS
+            );
+            boidIndex++;
+        }
     }
-    // Enemy Flock - spawn in opposite corner (top-right)
-    for (let i = 0; i < enemyBoids; i++) {
-        writeBoid(data, playerBoids + i, 2,  // packId = 2 for enemy
-            (ARENA_SIZE - 2.0) + (Math.random() * 2 - 1) * SPAWN_RADIUS,
-            (ARENA_SIZE - 2.0) + (Math.random() * 2 - 1) * SPAWN_RADIUS
-        );
-    }
+
     // Food
     for (let i = 0; i < FOOD_COUNT; i++) {
-        writeBoid(data, playerBoids + enemyBoids + i, 1,
+        writeBoid(data, boidIndex + i, 1,
             (Math.random() * 2 - 1) * (ARENA_SIZE - 0.2),
             (Math.random() * 2 - 1) * (ARENA_SIZE - 0.2)
         );
     }
 
     engine.setTriangleData(totalEntities, data);
-    updateScore();
+    updateLeaderboard();
 }
 
 function writeBoid(data, index, packId, x, y, captureTime = 0) {
@@ -114,15 +159,39 @@ function writeBoid(data, index, packId, x, y, captureTime = 0) {
     data[base + 7] = 0; // Padding
 }
 
-function updateScore() {
+// Flock CSS colors (matching shader colors)
+const FLOCK_COLORS = {
+    0: '#33ccff', // Blue (player)
+    2: '#ff5533', // Red
+    3: '#cc55ff', // Purple
+    4: '#55ff66', // Green
+};
+
+function updateLeaderboard() {
     const countEl = document.getElementById('count');
+
+    // Update player boids count from flocks array
+    playerBoids = flocks[0].count;
+
     if (playerBoids <= 0) {
-        countEl.innerText = "GAME OVER";
-        countEl.style.color = "#ff4444";
-    } else {
-        countEl.innerText = `You: ${playerBoids} | Enemy: ${enemyBoids}`;
-        countEl.style.color = "";
+        countEl.innerHTML = '<span style="color:#ff4444;font-size:24px;">GAME OVER</span>';
+        return;
     }
+
+    // Sort flocks by count (descending)
+    const sorted = [...flocks].sort((a, b) => b.count - a.count);
+
+    // Build leaderboard HTML
+    let html = '<div style="text-align:left;">';
+    sorted.forEach((flock, i) => {
+        const color = FLOCK_COLORS[flock.packId] || '#fff';
+        const isPlayer = flock.packId === 0;
+        const style = `color:${color};${isPlayer ? 'font-weight:bold;' : ''}`;
+        html += `<div style="${style}">${i + 1}. ${flock.name}: ${flock.count}</div>`;
+    });
+    html += '</div>';
+
+    countEl.innerHTML = html;
 }
 
 // Convert screen coords to world coords using current camera
@@ -199,73 +268,57 @@ async function checkCollisions() {
     if (!gpuData) return;
 
     let changed = false;
-    const players = [];
-    const foods = [];
-    const enemies = [];
 
+    // Build boidsByPack: { packId: [indices] }
+    const boidsByPack = {};
     for (let i = 0; i < totalEntities; i++) {
         const base = i * STRIDE_FLOATS;
-        const packId = gpuData[base + 4];
-        if (packId === 0) players.push(i);
-        else if (packId === 1) foods.push(i);
-        else if (packId === 2) enemies.push(i);
+        const packId = Math.round(gpuData[base + 4]);
+        if (!boidsByPack[packId]) boidsByPack[packId] = [];
+        boidsByPack[packId].push(i);
     }
+
+    const foods = boidsByPack[1] || [];
+    const players = boidsByPack[0] || [];
 
     // Update pack center target (interpolation happens in gameLoop)
     updatePackCenter(gpuData, players);
 
+    // Food capture by any flock
     for (const fIdx of foods) {
         const fBase = fIdx * STRIDE_FLOATS;
         const fx = gpuData[fBase + 0];
         const fy = gpuData[fBase + 1];
         let captured = false;
 
-        // Check Player Collisions
-        for (const pIdx of players) {
-            const pBase = pIdx * STRIDE_FLOATS;
-            const px = gpuData[pBase + 0];
-            const py = gpuData[pBase + 1];
-            const dx = fx - px;
-            const dy = fy - py;
+        // Check against all non-food flocks
+        for (const flock of flocks) {
+            if (captured) break;
+            const flockBoids = boidsByPack[flock.packId] || [];
 
-            if (dx * dx + dy * dy < 0.01) {
-                gpuData[fBase + 6] = gpuData[fBase + 4]; // Store previous packId
-                gpuData[fBase + 4] = 0; // Set packId to Player
-                gpuData[fBase + 5] = engine.params.time;
-                pushOutward(gpuData, fBase, fx, fy, players);
-                changed = true;
-                captured = true;
-                playerBoids++;
-                break;
-            }
-        }
+            for (const bIdx of flockBoids) {
+                const bBase = bIdx * STRIDE_FLOATS;
+                const bx = gpuData[bBase + 0];
+                const by = gpuData[bBase + 1];
+                const dx = fx - bx;
+                const dy = fy - by;
 
-        if (captured) continue;
-
-        // Check Enemy Collisions
-        for (const eIdx of enemies) {
-            const eBase = eIdx * STRIDE_FLOATS;
-            const ex = gpuData[eBase + 0];
-            const ey = gpuData[eBase + 1];
-            const dx = fx - ex;
-            const dy = fy - ey;
-
-            if (dx * dx + dy * dy < 0.01) {
-                gpuData[fBase + 6] = gpuData[fBase + 4]; // Store previous packId
-                gpuData[fBase + 4] = 2; // Set packId to Enemy
-                gpuData[fBase + 5] = engine.params.time;
-                pushOutward(gpuData, fBase, fx, fy, enemies);
-                changed = true;
-                enemyBoids++;
-                break;
+                if (dx * dx + dy * dy < 0.01) {
+                    gpuData[fBase + 6] = gpuData[fBase + 4]; // Store previous packId
+                    gpuData[fBase + 4] = flock.packId;
+                    gpuData[fBase + 5] = engine.params.time;
+                    pushOutward(gpuData, fBase, fx, fy, flockBoids);
+                    flock.count++;
+                    changed = true;
+                    captured = true;
+                    break;
+                }
             }
         }
     }
 
     if (changed) {
-        let newData = gpuData;
         const newTotal = totalEntities + 1;
-
         const biggerData = new Float32Array(newTotal * STRIDE_FLOATS);
         biggerData.set(gpuData);
 
@@ -276,64 +329,49 @@ async function checkCollisions() {
 
         totalEntities = newTotal;
         engine.setTriangleData(totalEntities, biggerData);
-        updateScore();
+        updateLeaderboard();
     }
 
     // Step 2.1: Flock vs Flock Consumption (size-based)
-    const CONSUME_RATIO = 1.5; // Must be 1.5x larger to consume
+    // Any flock 1.5x larger can consume another flock's boids
+    const CONSUME_RATIO = 1.5;
 
-    // Player consumes Enemy boids
-    if (playerBoids > enemyBoids * CONSUME_RATIO) {
-        for (const eIdx of enemies) {
-            const eBase = eIdx * STRIDE_FLOATS;
-            const ex = gpuData[eBase + 0];
-            const ey = gpuData[eBase + 1];
+    for (let i = 0; i < flocks.length; i++) {
+        const attackerFlock = flocks[i];
+        const attackerBoids = boidsByPack[attackerFlock.packId] || [];
 
-            for (const pIdx of players) {
-                const pBase = pIdx * STRIDE_FLOATS;
-                const px = gpuData[pBase + 0];
-                const py = gpuData[pBase + 1];
-                const dx = ex - px;
-                const dy = ey - py;
+        for (let j = 0; j < flocks.length; j++) {
+            if (i === j) continue;
+            const defenderFlock = flocks[j];
 
-                if (dx * dx + dy * dy < 0.02) {
-                    gpuData[eBase + 6] = gpuData[eBase + 4]; // Store previous packId
-                    gpuData[eBase + 4] = 0; // Convert to Player
-                    gpuData[eBase + 5] = engine.params.time;
-                    pushOutward(gpuData, eBase, ex, ey, players);
-                    playerBoids++;
-                    enemyBoids--;
-                    engine.setTriangleData(totalEntities, gpuData);
-                    updateScore();
-                    break;
-                }
-            }
-        }
-    }
-    // Enemy consumes Player boids
-    else if (enemyBoids > playerBoids * CONSUME_RATIO) {
-        for (const pIdx of players) {
-            const pBase = pIdx * STRIDE_FLOATS;
-            const px = gpuData[pBase + 0];
-            const py = gpuData[pBase + 1];
+            // Only attack if significantly larger
+            if (attackerFlock.count < defenderFlock.count * CONSUME_RATIO) continue;
 
-            for (const eIdx of enemies) {
-                const eBase = eIdx * STRIDE_FLOATS;
-                const ex = gpuData[eBase + 0];
-                const ey = gpuData[eBase + 1];
-                const dx = px - ex;
-                const dy = py - ey;
+            const defenderBoids = boidsByPack[defenderFlock.packId] || [];
 
-                if (dx * dx + dy * dy < 0.02) {
-                    gpuData[pBase + 6] = gpuData[pBase + 4]; // Store previous packId
-                    gpuData[pBase + 4] = 2; // Convert to Enemy
-                    gpuData[pBase + 5] = engine.params.time;
-                    pushOutward(gpuData, pBase, px, py, enemies);
-                    enemyBoids++;
-                    playerBoids--;
-                    engine.setTriangleData(totalEntities, gpuData);
-                    updateScore();
-                    break;
+            for (const dIdx of defenderBoids) {
+                const dBase = dIdx * STRIDE_FLOATS;
+                const dx0 = gpuData[dBase + 0];
+                const dy0 = gpuData[dBase + 1];
+
+                for (const aIdx of attackerBoids) {
+                    const aBase = aIdx * STRIDE_FLOATS;
+                    const ax = gpuData[aBase + 0];
+                    const ay = gpuData[aBase + 1];
+                    const distX = dx0 - ax;
+                    const distY = dy0 - ay;
+
+                    if (distX * distX + distY * distY < 0.02) {
+                        gpuData[dBase + 6] = gpuData[dBase + 4]; // Store prev
+                        gpuData[dBase + 4] = attackerFlock.packId;
+                        gpuData[dBase + 5] = engine.params.time;
+                        pushOutward(gpuData, dBase, dx0, dy0, attackerBoids);
+                        attackerFlock.count++;
+                        defenderFlock.count--;
+                        engine.setTriangleData(totalEntities, gpuData);
+                        updateLeaderboard();
+                        break;
+                    }
                 }
             }
         }
