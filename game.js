@@ -3,7 +3,7 @@ import { BoidsEngine } from './engine.js';
 
 const STARTING_BOIDS = 4;
 const STARTING_ENEMY_BOIDS = 4;  // Each enemy flock starting size
-const ENEMY_FLOCK_COUNT = 16;     // Number of enemy flocks
+const ENEMY_FLOCK_COUNT = 15;     // Number of enemy flocks
 const FOOD_COUNT = 1000;
 const MAX_CAPACITY = 6000;
 const ARENA_SIZE = 10.0;
