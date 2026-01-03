@@ -3,10 +3,10 @@ import { BoidsEngine } from './engine.js';
 
 const STARTING_BOIDS = 4;
 const STARTING_ENEMY_BOIDS = 4;  // Each enemy flock starting size
-const ENEMY_FLOCK_COUNT = 13;     // Number of enemy flocks
+const ENEMY_FLOCK_COUNT = 1;     // Number of enemy flocks
 const FOOD_COUNT = 50;
 const MAX_CAPACITY = 2000;
-const ARENA_SIZE = 8.0;
+const ARENA_SIZE = 3.0;
 const COLOR_FADE_DURATION = 4.0;
 
 // Flock names pool (40 names)
@@ -213,32 +213,88 @@ function updateLeaderboard() {
     // Update player boids count from flocks array
     playerBoids = flocks[0].count;
 
+    // Check for game end conditions
+    const aliveFlocks = flocks.filter(f => f.count > 0);
+
     if (playerBoids <= 0) {
-        countEl.innerHTML = '<span style="color:#ff4444;font-size:24px;">GAME OVER</span>';
+        showGameEnd(false); // Game over
         return;
     }
 
-    // Sort flocks by count (descending)
-    const sorted = [...flocks].sort((a, b) => b.count - a.count);
+    if (aliveFlocks.length === 1 && aliveFlocks[0].packId === 0) {
+        showGameEnd(true); // Victory!
+        return;
+    }
+
+    // Sort flocks by count (descending), but keep eliminated at bottom
+    const sorted = [...flocks].sort((a, b) => {
+        if (a.count <= 0 && b.count > 0) return 1;
+        if (b.count <= 0 && a.count > 0) return -1;
+        return b.count - a.count;
+    });
 
     // Build leaderboard HTML - compact style with gradient names
     let html = '<div style="text-align:left;font-size:11px;line-height:1.3;">';
     sorted.forEach((flock, i) => {
         const colors = getFlockColors(flock.packId);
         const isPlayer = flock.packId === 0;
+        const isEliminated = flock.count <= 0;
         const name = flock.name.split(' ')[0];
 
-        // Gradient style for name
-        const gradientStyle = `background: linear-gradient(90deg, ${colors.line}, ${colors.fill});-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;display:inline;`;
+        // Gradient style for name (gray if eliminated)
+        const gradientColors = isEliminated ? '#666, #444' : `${colors.line}, ${colors.fill}`;
+        const gradientStyle = `background: linear-gradient(90deg, ${gradientColors});-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;display:inline;`;
 
-        const countColor = colors.line;
+        const countColor = isEliminated ? '#666' : colors.line;
         const boldStyle = isPlayer ? 'font-weight:bold;' : '';
-        html += `<div style="${boldStyle}">${i + 1}. <span style="${gradientStyle}">${name}</span>: <span style="color:${countColor}">${flock.count}</span></div>`;
+        const strikeStyle = isEliminated ? 'text-decoration:line-through;opacity:0.6;' : '';
+
+        html += `<div style="${boldStyle}${strikeStyle}">${i + 1}. <span style="${gradientStyle}">${name}</span>: <span style="color:${countColor}">${flock.count}</span></div>`;
     });
     html += '</div>';
 
     countEl.innerHTML = html;
 }
+
+let gameEnded = false;
+
+function showGameEnd(isVictory) {
+    if (gameEnded) return;
+    gameEnded = true;
+
+    const endDiv = document.getElementById('game-end');
+    const title = document.getElementById('end-title');
+    const message = document.getElementById('end-message');
+    const stats = document.getElementById('end-stats');
+
+    if (isVictory) {
+        title.textContent = '🏆 VICTORY!';
+        title.style.color = '#4ECDC4';
+        message.textContent = 'You dominated all other flocks!';
+        stats.innerHTML = `Final pack size: <strong>${playerBoids}</strong> boids`;
+    } else {
+        title.textContent = '💀 GAME OVER';
+        title.style.color = '#ff4444';
+        message.textContent = 'Your flock was eliminated!';
+        const winner = flocks.reduce((a, b) => a.count > b.count ? a : b);
+        stats.innerHTML = `Winner: <strong>${winner.name}</strong> with ${winner.count} boids`;
+    }
+
+    endDiv.style.display = 'block';
+
+    if (isVictory) {
+        // Victory: keep simulation running but disable mouse influence
+        engine.setParams({ clickState: 0 });
+    } else {
+        // Game over: stop everything
+        engine.stop();
+    }
+}
+
+// Restart button handler
+document.getElementById('restart-btn')?.addEventListener('click', () => {
+    location.reload();
+});
 
 // Convert screen coords to world coords using current camera
 function updateMouseWorldPos() {
