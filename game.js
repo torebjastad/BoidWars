@@ -304,6 +304,37 @@ document.getElementById('restart-btn')?.addEventListener('click', () => {
     location.reload();
 });
 
+// Press Space to restart game at any time
+document.addEventListener('keydown', (e) => {
+    if (e.code === 'Space') {
+        e.preventDefault();
+        restartGame();
+    }
+});
+
+function restartGame() {
+    // Hide any end dialogs
+    document.getElementById('game-end').style.display = 'none';
+    document.getElementById('intro').style.display = 'none';
+
+    // Reset game state
+    gameEnded = false;
+    flocks = generateFlocks();
+
+    // Reset camera
+    cameraX = 0;
+    cameraY = 0;
+    cameraZoom = BASE_ZOOM;
+    targetZoom = BASE_ZOOM;
+
+    // Reset game data and start
+    resetGame();
+    if (!engine.isRunning) {
+        engine.start();
+        gameLoop();
+    }
+}
+
 // Convert screen coords to world coords using current camera
 function updateMouseWorldPos() {
     // Screen normalized -> NDC (-1 to 1) -> World (accounting for camera and aspect ratio)
