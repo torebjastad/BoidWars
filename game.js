@@ -3,11 +3,15 @@ import { BoidsEngine } from './engine.js';
 
 const STARTING_BOIDS = 4;
 const STARTING_ENEMY_BOIDS = 4;  // Each enemy flock starting size
-const ENEMY_FLOCK_COUNT = 1;     // Number of enemy flocks
+const ENEMY_FLOCK_COUNT = 20;     // Number of enemy flocks
 const FOOD_COUNT = 50;
 const MAX_CAPACITY = 2000;
-const ARENA_SIZE = 3.0;
+const ARENA_SIZE = 10.0;
 const COLOR_FADE_DURATION = 4.0;
+
+// AI Tuning Parameters
+const AI_STRENGTH = 0.003;       // How strongly enemies hunt smaller flocks
+const AI_FLEE_STRENGTH = 0.004;  // How strongly enemies flee from larger flocks
 
 // Flock names pool (40 names)
 const FLOCK_NAMES = [
@@ -62,7 +66,7 @@ const GAME_PARAMS = {
     cohesionDistance: 5.0,      // 0.3 * 3.33
     cohesionStrength: 0.002,    // Exact from preset
     triangleSize: 0.1,
-    triangleCount: STARTING_BOIDS,
+    triangleCount: STARTING_BOIDS + (STARTING_ENEMY_BOIDS * ENEMY_FLOCK_COUNT) + FOOD_COUNT,
     colorFadeDuration: COLOR_FADE_DURATION,
     arenaSize: ARENA_SIZE,      // Pass to shader for boundary logic
     // Camera initial values
@@ -383,8 +387,87 @@ async function checkCollisions() {
     const foods = boidsByPack[1] || [];
     const players = boidsByPack[0] || [];
 
+    // Sync flock counts from actual GPU data to fix any desync
+    for (const flock of flocks) {
+        const actualCount = (boidsByPack[flock.packId] || []).length;
+        flock.count = actualCount;
+    }
+
     // Update pack center target (interpolation happens in gameLoop)
     updatePackCenter(gpuData, players);
+
+    // Calculate flock centers for AI
+    const flockCenters = {};
+    for (const flock of flocks) {
+        const indices = boidsByPack[flock.packId] || [];
+        if (indices.length === 0) {
+            flockCenters[flock.packId] = null;
+            continue;
+        }
+        let cx = 0, cy = 0;
+        for (const idx of indices) {
+            const base = idx * STRIDE_FLOATS;
+            cx += gpuData[base + 0];
+            cy += gpuData[base + 1];
+        }
+        flockCenters[flock.packId] = { x: cx / indices.length, y: cy / indices.length };
+    }
+
+    // Apply AI steering to enemy flocks
+
+    for (const flock of flocks) {
+        if (flock.packId === 0 || flock.packId === 1) continue; // Skip player and food
+        const myIndices = boidsByPack[flock.packId] || [];
+        if (myIndices.length === 0) continue;
+
+        const myCenter = flockCenters[flock.packId];
+        if (!myCenter) continue;
+
+        let steerX = 0, steerY = 0;
+
+        // Check other flocks (not food)
+        for (const other of flocks) {
+            if (other.packId === flock.packId || other.packId === 1) continue;
+            const otherCenter = flockCenters[other.packId];
+            if (!otherCenter || other.count <= 0) continue;
+
+            const dx = otherCenter.x - myCenter.x;
+            const dy = otherCenter.y - myCenter.y;
+            const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+
+            if (other.count < flock.count * 0.8) {
+                // Hunt smaller flocks (attract)
+                steerX += (dx / dist) * AI_STRENGTH;
+                steerY += (dy / dist) * AI_STRENGTH;
+            } else if (other.count > flock.count * 1.2) {
+                // Flee from larger flocks (repel)
+                steerX -= (dx / dist) * AI_FLEE_STRENGTH;
+                steerY -= (dy / dist) * AI_FLEE_STRENGTH;
+            }
+        }
+
+        // Also seek food
+        for (const fIdx of foods) {
+            const fBase = fIdx * STRIDE_FLOATS;
+            const fx = gpuData[fBase + 0];
+            const fy = gpuData[fBase + 1];
+            const dx = fx - myCenter.x;
+            const dy = fy - myCenter.y;
+            const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+            if (dist < 2.0) {
+                steerX += (dx / dist) * AI_STRENGTH * 0.5;
+                steerY += (dy / dist) * AI_STRENGTH * 0.5;
+            }
+        }
+
+        // Apply steering to all boids in this flock
+        for (const idx of myIndices) {
+            const base = idx * STRIDE_FLOATS;
+            gpuData[base + 2] += steerX;
+            gpuData[base + 3] += steerY;
+        }
+        changed = true;
+    }
 
     // Food capture by any flock
     for (const fIdx of foods) {
@@ -419,6 +502,9 @@ async function checkCollisions() {
         }
     }
 
+    // Track the correct data array (might have been expanded for new food)
+    let currentData = gpuData;
+
     if (changed) {
         const newTotal = totalEntities + 1;
         const biggerData = new Float32Array(newTotal * STRIDE_FLOATS);
@@ -430,13 +516,13 @@ async function checkCollisions() {
         );
 
         totalEntities = newTotal;
-        engine.setTriangleData(totalEntities, biggerData);
-        updateLeaderboard();
+        currentData = biggerData;  // Use the expanded array
     }
 
     // Step 2.1: Flock vs Flock Consumption (size-based)
     // Any flock 1.5x larger can consume another flock's boids
     const CONSUME_RATIO = 1.5;
+    let flockCaptureOccurred = false;
 
     for (let i = 0; i < flocks.length; i++) {
         const attackerFlock = flocks[i];
@@ -453,30 +539,35 @@ async function checkCollisions() {
 
             for (const dIdx of defenderBoids) {
                 const dBase = dIdx * STRIDE_FLOATS;
-                const dx0 = gpuData[dBase + 0];
-                const dy0 = gpuData[dBase + 1];
+                const dx0 = currentData[dBase + 0];
+                const dy0 = currentData[dBase + 1];
 
                 for (const aIdx of attackerBoids) {
                     const aBase = aIdx * STRIDE_FLOATS;
-                    const ax = gpuData[aBase + 0];
-                    const ay = gpuData[aBase + 1];
+                    const ax = currentData[aBase + 0];
+                    const ay = currentData[aBase + 1];
                     const distX = dx0 - ax;
                     const distY = dy0 - ay;
 
                     if (distX * distX + distY * distY < 0.02) {
-                        gpuData[dBase + 6] = gpuData[dBase + 4]; // Store prev
-                        gpuData[dBase + 4] = attackerFlock.packId;
-                        gpuData[dBase + 5] = engine.params.time;
-                        pushOutward(gpuData, dBase, dx0, dy0, attackerBoids);
+                        currentData[dBase + 6] = currentData[dBase + 4]; // Store prev
+                        currentData[dBase + 4] = attackerFlock.packId;
+                        currentData[dBase + 5] = engine.params.time;
+                        pushOutward(currentData, dBase, dx0, dy0, attackerBoids);
                         attackerFlock.count++;
                         defenderFlock.count--;
-                        engine.setTriangleData(totalEntities, gpuData);
-                        updateLeaderboard();
+                        flockCaptureOccurred = true;
                         break;
                     }
                 }
             }
         }
+    }
+
+    // Only call setTriangleData once at the end if anything changed
+    if (changed || flockCaptureOccurred) {
+        engine.setTriangleData(totalEntities, currentData);
+        updateLeaderboard();
     }
 }
 
