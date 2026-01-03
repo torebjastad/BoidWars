@@ -162,7 +162,7 @@ fn mainCompute(@builtin(global_invocation_id) gid: vec3u) {
 
     instanceInfo.velocity += force;
     
-    let maxSpeed = ${isGame ? '0.03' : '0.01'}; 
+    let maxSpeed = ${isGame ? '0.05' : '0.01'}; 
     instanceInfo.velocity = normalize(instanceInfo.velocity) * clamp(length(instanceInfo.velocity), 0.0, maxSpeed);
 
     // Boundary Logic

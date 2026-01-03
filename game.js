@@ -3,15 +3,19 @@ import { BoidsEngine } from './engine.js';
 
 const STARTING_BOIDS = 4;
 const STARTING_ENEMY_BOIDS = 4;  // Each enemy flock starting size
-const ENEMY_FLOCK_COUNT = 20;     // Number of enemy flocks
-const FOOD_COUNT = 50;
-const MAX_CAPACITY = 2000;
+const ENEMY_FLOCK_COUNT = 25;     // Number of enemy flocks
+const FOOD_COUNT = 1000;
+const MAX_CAPACITY = 6000;
 const ARENA_SIZE = 10.0;
 const COLOR_FADE_DURATION = 4.0;
 
 // AI Tuning Parameters
 const AI_STRENGTH = 0.003;       // How strongly enemies hunt smaller flocks
 const AI_FLEE_STRENGTH = 0.004;  // How strongly enemies flee from larger flocks
+
+// Capture Detection Radii (squared distance thresholds)
+const CAPTURE_RADIUS_FOOD = 0.02;   // Food capture radius (increase for faster speeds)
+const CAPTURE_RADIUS_FLOCK = 0.02;  // Flock vs flock capture radius
 
 // Flock names pool (40 names)
 const FLOCK_NAMES = [
@@ -488,7 +492,7 @@ async function checkCollisions() {
                 const dx = fx - bx;
                 const dy = fy - by;
 
-                if (dx * dx + dy * dy < 0.01) {
+                if (dx * dx + dy * dy < CAPTURE_RADIUS_FOOD) {
                     gpuData[fBase + 6] = gpuData[fBase + 4]; // Store previous packId
                     gpuData[fBase + 4] = flock.packId;
                     gpuData[fBase + 5] = engine.params.time;
@@ -549,7 +553,7 @@ async function checkCollisions() {
                     const distX = dx0 - ax;
                     const distY = dy0 - ay;
 
-                    if (distX * distX + distY * distY < 0.02) {
+                    if (distX * distX + distY * distY < CAPTURE_RADIUS_FLOCK) {
                         currentData[dBase + 6] = currentData[dBase + 4]; // Store prev
                         currentData[dBase + 4] = attackerFlock.packId;
                         currentData[dBase + 5] = engine.params.time;
