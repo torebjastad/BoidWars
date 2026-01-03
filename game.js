@@ -9,12 +9,12 @@ const MAX_CAPACITY = 2000;
 const ARENA_SIZE = 8.0;
 const COLOR_FADE_DURATION = 4.0;
 
-// Flock names pool (20 names for future expansion)
+// Flock names pool (40 names)
 const FLOCK_NAMES = [
-    "You",           // 0 - Player (always first)
-    "Crimson Tide",  // 2
-    "Shadow Legion", // 3
-    "Venom Swarm",   // 4
+    "You",              // Player
+    "Crimson Tide",
+    "Shadow Legion",
+    "Venom Swarm",
     "Frost Fangs",
     "Thunder Hawks",
     "Ember Wolves",
@@ -30,7 +30,27 @@ const FLOCK_NAMES = [
     "Chaos Swarm",
     "Glacier Pack",
     "Solar Flares",
-    "Dark Matter"
+    "Dark Matter",
+    "Cyber Sharks",
+    "Plasma Horde",
+    "Nebula Swarm",
+    "Toxic Wasps",
+    "Crystal Claws",
+    "Obsidian Wings",
+    "Quantum Drift",
+    "Savage Pulse",
+    "Binary Flock",
+    "Magma Core",
+    "Azure Storm",
+    "Primal Fury",
+    "Static Surge",
+    "Lunar Eclipse",
+    "Inferno Clan",
+    "Turbo Swarm",
+    "Vortex Squad",
+    "Crimson Dawn",
+    "Arctic Blitz",
+    "Nova Burst"
 ];
 
 const GAME_PARAMS = {
@@ -173,14 +193,18 @@ function writeBoid(data, index, packId, x, y, captureTime = 0) {
     data[base + 7] = 0; // Padding
 }
 
-// Generate flock CSS color (matching shader algorithm)
-function getFlockColor(packId) {
-    if (packId === 0) return '#33ccff'; // Player - blue
-    if (packId === 1) return '#ffcc33'; // Food - yellow
-    // Enemy flocks: use same hue algorithm as shader
+// Generate dual flock colors: {line, fill} (matching shader algorithm)
+function getFlockColors(packId) {
+    if (packId === 0) return { line: '#ffffff', fill: '#33ccff' }; // Player - white/blue
+    if (packId === 1) return { line: '#ffcc33', fill: '#ffcc33' }; // Food - yellow
+    // Enemy flocks: use two offset hues for line and fill
     const enemyIndex = packId - 2;
-    const hue = ((0 + enemyIndex * 0.13) % 1) * 360;
-    return `hsl(${hue}, 80%, 55%)`;
+    const hue1 = ((enemyIndex * 0.13) % 1) * 360;
+    const hue2 = ((enemyIndex * 0.13 + 0.5) % 1) * 360;  // Complementary color
+    return {
+        line: `hsl(${hue1}, 90%, 65%)`,
+        fill: `hsl(${hue2}, 80%, 45%)`
+    };
 }
 
 function updateLeaderboard() {
@@ -197,13 +221,19 @@ function updateLeaderboard() {
     // Sort flocks by count (descending)
     const sorted = [...flocks].sort((a, b) => b.count - a.count);
 
-    // Build leaderboard HTML
-    let html = '<div style="text-align:left;">';
+    // Build leaderboard HTML - compact style with gradient names
+    let html = '<div style="text-align:left;font-size:11px;line-height:1.3;">';
     sorted.forEach((flock, i) => {
-        const color = getFlockColor(flock.packId);
+        const colors = getFlockColors(flock.packId);
         const isPlayer = flock.packId === 0;
-        const style = `color:${color};${isPlayer ? 'font-weight:bold;' : ''}`;
-        html += `<div style="${style}">${i + 1}. ${flock.name}: ${flock.count}</div>`;
+        const name = flock.name.split(' ')[0];
+
+        // Gradient style for name
+        const gradientStyle = `background: linear-gradient(90deg, ${colors.line}, ${colors.fill});-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;display:inline;`;
+
+        const countColor = colors.line;
+        const boldStyle = isPlayer ? 'font-weight:bold;' : '';
+        html += `<div style="${boldStyle}">${i + 1}. <span style="${gradientStyle}">${name}</span>: <span style="color:${countColor}">${flock.count}</span></div>`;
     });
     html += '</div>';
 

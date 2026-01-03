@@ -222,15 +222,25 @@ fn hueToRGB(h: f32) -> vec3f {
     return clamp(vec3f(r, g, b), vec3f(0.0), vec3f(1.0));
 }
 
-// Get flock color by packId (procedural for unlimited flocks)
-fn getFlockColor(packId: f32) -> vec4f {
-    if (packId < 0.5) { return vec4(0.2, 0.8, 1.0, 1.0); } // Player - blue
+// Get dual flock colors: returns line color (x=0) or fill color (x=1)
+fn getFlockLineColor(packId: f32) -> vec4f {
+    if (packId < 0.5) { return vec4(1.0, 1.0, 1.0, 1.0); } // Player - white line
     if (packId < 1.5) { return vec4(1.0, 0.8, 0.2, 1.0); } // Food - yellow
-    // Enemy flocks: distribute hues
+    // Enemy flocks: primary hue
     let enemyIndex = packId - 2.0;
-    let hue = fract(0.0 + enemyIndex * 0.13);
+    let hue = fract(enemyIndex * 0.13);
     let rgb = hueToRGB(hue);
     return vec4(rgb * 0.9 + 0.1, 1.0);
+}
+
+fn getFlockFillColor(packId: f32) -> vec4f {
+    if (packId < 0.5) { return vec4(0.2, 0.8, 1.0, 1.0); } // Player - blue fill
+    if (packId < 1.5) { return vec4(1.0, 0.8, 0.2, 1.0); } // Food - yellow
+    // Enemy flocks: complementary hue for fill
+    let enemyIndex = packId - 2.0;
+    let hue = fract(enemyIndex * 0.13 + 0.5);  // Offset by 0.5 for complementary
+    let rgb = hueToRGB(hue);
+    return vec4(rgb * 0.7 + 0.1, 1.0);  // Slightly darker
 }
 ` : ''}
 
@@ -261,36 +271,38 @@ fn mainVert(@builtin(instance_index) ii: u32, @location(0) v: vec2f) -> VertexOu
     );
 
     ${isGame ? `
-    let playerColor = vec4(0.2, 0.8, 1.0, 1.0);  // Blue (packId 0)
     let foodColor = vec4(1.0, 0.8, 0.2, 1.0);    // Yellow (packId 1)
     
-    var targetColor = getFlockColor(instanceInfo.packId);
-    var fromColor = getFlockColor(instanceInfo.prevPackId);
+    // Get dual colors for current and previous pack
+    var targetLineColor = getFlockLineColor(instanceInfo.packId);
+    var targetFillColor = getFlockFillColor(instanceInfo.packId);
+    var fromLineColor = getFlockLineColor(instanceInfo.prevPackId);
+    var fromFillColor = getFlockFillColor(instanceInfo.prevPackId);
+    
     if (instanceInfo.prevPackId < 0.1 && instanceInfo.captureTime == 0.0) {
-        fromColor = foodColor; // Default from food if not captured
+        fromLineColor = foodColor;
+        fromFillColor = foodColor;
     }
     
-    if (instanceInfo.packId < 0.5) {
-        // Player pack (packId 0)
-        if (instanceInfo.captureTime > 0.0) {
-            let elapsed = params.time - instanceInfo.captureTime;
-            let t = clamp(elapsed / params.colorFadeDuration, 0.0, 1.0);
-            baseColor = mix(fromColor, playerColor, t);
-        } else {
-            baseColor = playerColor;
-        }
-    } else if (instanceInfo.packId < 1.5) {
-        // Food (packId 1)
+    // Edge detection: normalize v.y from triangle coords
+    // Triangle: tip at y=size, base at y=-size/2
+    // Normalize to 0-1 range where 1=tip, 0=base
+    let normalizedY = (v.y + params.triangleSize * 0.5) / (params.triangleSize * 1.5);
+    let edgeFactor = smoothstep(0.3, 0.8, normalizedY);
+    
+    if (instanceInfo.packId > 0.5 && instanceInfo.packId < 1.5) {
+        // Food (packId 1) - single yellow color
         baseColor = foodColor;
+    } else if (instanceInfo.captureTime > 0.0 && instanceInfo.packId != instanceInfo.prevPackId) {
+        // Fading between packs
+        let elapsed = params.time - instanceInfo.captureTime;
+        let t = clamp(elapsed / params.colorFadeDuration, 0.0, 1.0);
+        let lineColor = mix(fromLineColor, targetLineColor, t);
+        let fillColor = mix(fromFillColor, targetFillColor, t);
+        baseColor = mix(fillColor, lineColor, edgeFactor);
     } else {
-        // Enemy pack (packId 2+)
-        if (instanceInfo.captureTime > 0.0) {
-            let elapsed = params.time - instanceInfo.captureTime;
-            let t = clamp(elapsed / params.colorFadeDuration, 0.0, 1.0);
-            baseColor = mix(fromColor, targetColor, t);
-        } else {
-            baseColor = targetColor;
-        }
+        // Normal dual-color rendering for all flocks (player and enemies)
+        baseColor = mix(targetFillColor, targetLineColor, edgeFactor);
     }
     ` : ''}
 
