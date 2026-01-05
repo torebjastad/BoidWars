@@ -303,10 +303,11 @@ export class BoidsEngine {
         } else {
             data = new Float32Array((byteSize / 4));
             const floatsPerBoid = stride / 4;
+            const spawnBound = this.isGame ? 1 : 5;  // Simulator has larger arena
             for (let i = 0; i < count; ++i) {
                 const base = i * floatsPerBoid;
-                data[base + 0] = Math.random() * 2 - 1;
-                data[base + 1] = Math.random() * 2 - 1;
+                data[base + 0] = (Math.random() * 2 - 1) * spawnBound;
+                data[base + 1] = (Math.random() * 2 - 1) * spawnBound;
                 data[base + 2] = Math.random() * 0.1 - 0.05;
                 data[base + 3] = Math.random() * 0.1 - 0.05;
                 if (this.isGame) {

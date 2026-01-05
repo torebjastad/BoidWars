@@ -158,11 +158,20 @@ fn mainCompute(@builtin(global_invocation_id) gid: vec3u) {
             }
         }
     }
-    ` : ''}
+    ` : `
+    // Simulator mode: all boids attracted to mouse when clicked
+    if (params.clickState == 1u) {
+        let mouseDir = params.mousePos - instanceInfo.position;
+        let distToMouse = length(mouseDir);
+        if (distToMouse > 0.05) {
+            force += normalize(mouseDir) * 0.02;
+        }
+    }
+    `}
 
     instanceInfo.velocity += force;
     
-    let maxSpeed = ${isGame ? '0.06' : '0.01'}; 
+    let maxSpeed = ${isGame ? '0.06' : '0.06'}; 
     instanceInfo.velocity = normalize(instanceInfo.velocity) * clamp(length(instanceInfo.velocity), 0.0, maxSpeed);
 
     // Boundary Logic
@@ -173,11 +182,13 @@ fn mainCompute(@builtin(global_invocation_id) gid: vec3u) {
     if (instanceInfo.position.y > bound) { instanceInfo.position.y = bound; instanceInfo.velocity.y *= -1.0; }
     if (instanceInfo.position.y < -bound) { instanceInfo.position.y = -bound; instanceInfo.velocity.y *= -1.0; }
     ` : `
+    // Simulator mode: larger wrap-around arena
+    let bound = 5.0;
     let size = params.triangleSize;
-    if (instanceInfo.position.x > 1.0 + size) { instanceInfo.position.x = -1.0 - size; }
-    if (instanceInfo.position.y > 1.0 + size) { instanceInfo.position.y = -1.0 - size; }
-    if (instanceInfo.position.x < -1.0 - size) { instanceInfo.position.x = 1.0 + size; }
-    if (instanceInfo.position.y < -1.0 - size) { instanceInfo.position.y = 1.0 + size; }
+    if (instanceInfo.position.x > bound + size) { instanceInfo.position.x = -bound - size; }
+    if (instanceInfo.position.y > bound + size) { instanceInfo.position.y = -bound - size; }
+    if (instanceInfo.position.x < -bound - size) { instanceInfo.position.x = bound + size; }
+    if (instanceInfo.position.y < -bound - size) { instanceInfo.position.y = bound + size; }
     `}
 
     instanceInfo.position += instanceInfo.velocity;
@@ -261,14 +272,29 @@ fn mainVert(@builtin(instance_index) ii: u32, @location(0) v: vec2f) -> VertexOu
     // Camera transform: center on cameraPos, apply zoom, correct aspect ratio
     pos.x = (worldPos.x - params.cameraPos.x) * params.cameraZoom / params.aspectRatio;
     pos.y = (worldPos.y - params.cameraPos.y) * params.cameraZoom;
-    ` : ''}
+    ` : `
+    // Simulator mode: simple zoom (no camera pan)
+    pos.x = worldPos.x * params.cameraZoom / params.aspectRatio;
+    pos.y = worldPos.y * params.cameraZoom;
+    `}
 
-    var baseColor = vec4(
-        sin(angle + colorPalette.r) * 0.45 + 0.45,
-        sin(angle + colorPalette.g) * 0.45 + 0.45,
-        sin(angle + colorPalette.b) * 0.45 + 0.45,
-        1.0
-    );
+    // Check for uniform color mode (all palette values are 0)
+    var baseColor: vec4f;
+    if (colorPalette.r < 0.01 && colorPalette.g < 0.01 && colorPalette.b < 0.01) {
+        // Uniform color - nice blue gradient (similar to game player)
+        let normalizedY = (v.y + params.triangleSize * 0.5) / (params.triangleSize * 1.5);
+        let tipColor = vec4(0.9, 0.95, 1.0, 1.0);    // White tip
+        let bodyColor = vec4(0.2, 0.5, 0.9, 1.0);    // Blue body
+        baseColor = mix(bodyColor, tipColor, normalizedY);
+    } else {
+        // Direction-based coloring
+        baseColor = vec4(
+            sin(angle + colorPalette.r) * 0.45 + 0.45,
+            sin(angle + colorPalette.g) * 0.45 + 0.45,
+            sin(angle + colorPalette.b) * 0.45 + 0.45,
+            1.0
+        );
+    }
 
     ${isGame ? `
     let foodColor = vec4(1.0, 0.8, 0.2, 1.0);    // Yellow (packId 1)

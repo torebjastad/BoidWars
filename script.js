@@ -4,8 +4,8 @@ import GUI from 'https://cdn.jsdelivr.net/npm/lil-gui@0.19/+esm';
 // --- Constants & Types ---
 
 const INITIAL_TRIANGLE_COUNT = 1000;
-const INITIAL_TRIANGLE_SIZE = 0.03;
-const PARAMS_SIZE_BYTES = 32;
+const INITIAL_TRIANGLE_SIZE = 0.1;
+const PARAMS_SIZE_BYTES = 48; // Expanded for mouse/zoom
 
 const INITIAL_PARAMS = {
     separationDistance: 0.05,
@@ -27,6 +27,14 @@ const COLOR_PRESETS = {
 
 const SIM_PRESETS = {
     default: { ...INITIAL_PARAMS },
+    game: {
+        separationDistance: 0.11,
+        separationStrength: 0.051,
+        alignmentDistance: 0.15,
+        alignmentStrength: 0.1,
+        cohesionDistance: 5.0,
+        cohesionStrength: 0.002,
+    },
     mosquitoes: {
         separationDistance: 0.02,
         separationStrength: 0.01,
@@ -61,8 +69,6 @@ const SIM_PRESETS = {
     },
 };
 
-// --- Shaders ---
-
 const commonWGSL = /* wgsl */`
 struct SimParams {
   separationDistance: f32,
@@ -73,6 +79,9 @@ struct SimParams {
   cohesionStrength: f32,
   triangleSize: f32,
   triangleCount: u32,
+  mousePos: vec2f,
+  clickState: u32,
+  zoom: f32,
 };
 
 struct TriangleInfo {
@@ -134,8 +143,17 @@ fn mainCompute(@builtin(global_invocation_id) gid: vec3u) {
         (alignment * params.alignmentStrength) +
         (cohesion * params.cohesionStrength);
     
-    // Clamp velocity
-    instanceInfo.velocity = normalize(instanceInfo.velocity) * clamp(length(instanceInfo.velocity), 0.0, 0.01);
+    // Mouse attraction when clicked
+    if (params.clickState == 1u) {
+        let mouseDir = params.mousePos - instanceInfo.position;
+        let distToMouse = length(mouseDir);
+        if (distToMouse > 0.05) {
+            instanceInfo.velocity += normalize(mouseDir) * 0.02;
+        }
+    }
+    
+    // Clamp velocity (increased to match game)
+    instanceInfo.velocity = normalize(instanceInfo.velocity) * clamp(length(instanceInfo.velocity), 0.0, 0.06);
 
     // Boundary wrap
     let size = params.triangleSize;
@@ -179,7 +197,8 @@ fn mainVert(@builtin(instance_index) ii: u32, @location(0) v: vec2f) -> VertexOu
     let angle = getRotationFromVelocity(instanceInfo.velocity);
     let rotated = rotate(v, angle);
     let offset = instanceInfo.position;
-    let pos = vec4(rotated + offset, 0.0, 1.0);
+    let worldPos = rotated + offset;
+    let pos = vec4(worldPos * params.zoom, 0.0, 1.0);
 
     let color = vec4(
         sin(angle + colorPalette.r) * 0.45 + 0.45,
@@ -236,6 +255,9 @@ async function init() {
         params: { ...INITIAL_PARAMS },
         colorPreset: 'jeans',
         simPreset: 'default',
+        mousePos: [0, 0],
+        clickState: 0,
+        zoom: 1.0,
     };
 
     // --- Resources ---
@@ -380,6 +402,10 @@ async function init() {
         view.setFloat32(20, p.cohesionStrength, true);
         view.setFloat32(24, p.triangleSize, true);
         view.setUint32(28, p.triangleCount, true);
+        view.setFloat32(32, appState.mousePos[0], true);
+        view.setFloat32(36, appState.mousePos[1], true);
+        view.setUint32(40, appState.clickState, true);
+        view.setFloat32(44, appState.zoom, true);
 
         device.queue.writeBuffer(paramsBuffer, 0, data);
     }
@@ -401,6 +427,33 @@ async function init() {
     createBindGroups();
     updateParamsBuffer();
     updateColorBuffer();
+
+    // --- Mouse/Zoom Event Handlers ---
+    canvas.addEventListener('mousemove', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        // Convert to normalized coordinates (-1 to 1), accounting for zoom
+        const x = ((e.clientX - rect.left) / rect.width * 2 - 1) / appState.zoom;
+        const y = -((e.clientY - rect.top) / rect.height * 2 - 1) / appState.zoom;
+        appState.mousePos = [x, y];
+    });
+
+    canvas.addEventListener('mousedown', () => {
+        appState.clickState = 1;
+    });
+
+    canvas.addEventListener('mouseup', () => {
+        appState.clickState = 0;
+    });
+
+    canvas.addEventListener('mouseleave', () => {
+        appState.clickState = 0;
+    });
+
+    canvas.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const delta = e.deltaY > 0 ? 0.9 : 1.1; // Zoom out or in
+        appState.zoom = Math.max(0.1, Math.min(5.0, appState.zoom * delta));
+    }, { passive: false });
 
     // --- GUI ---
     const gui = new GUI({ title: 'Boids Tuning' });
@@ -451,6 +504,9 @@ async function init() {
 
     function frame() {
         frameCount++;
+
+        // Update params every frame for mouse/zoom
+        updateParamsBuffer();
 
         const commandEncoder = device.createCommandEncoder();
 
