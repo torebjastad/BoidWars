@@ -1,21 +1,56 @@
 
 import { BoidsEngine } from './engine.js';
 
-const STARTING_BOIDS = 4;
-const STARTING_ENEMY_BOIDS = 4;  // Each enemy flock starting size
-const ENEMY_FLOCK_COUNT = 15;     // Number of enemy flocks
-const FOOD_COUNT = 1000;
-const MAX_CAPACITY = 6000;
-const ARENA_SIZE = 10.0;
-const COLOR_FADE_DURATION = 4.0;
+// ============================================================================
+// GAME TUNING PARAMETERS
+// ============================================================================
 
-// AI Tuning Parameters
-const AI_STRENGTH = 0.003;       // How strongly enemies hunt smaller flocks
-const AI_FLEE_STRENGTH = 0.004;  // How strongly enemies flee from larger flocks
+// Flock Configuration
+const STARTING_BOIDS = 4;         // Player's initial flock size
+const STARTING_ENEMY_BOIDS = 4;   // Each enemy flock's starting size
+const ENEMY_FLOCK_COUNT = 15;     // Total number of enemy flocks in the game
+const FOOD_COUNT = 1000;          // Number of food boids scattered in arena
+const MAX_CAPACITY = 6000;        // Maximum total entities (prevents memory issues)
 
-// Capture Detection Radii (squared distance thresholds)
-const CAPTURE_RADIUS_FOOD = 0.02;   // Food capture radius (increase for faster speeds)
-const CAPTURE_RADIUS_FLOCK = 0.02;  // Flock vs flock capture radius
+// Arena and Visuals
+const ARENA_SIZE = 10.0;          // Size of the playable arena (boids bounce at edges)
+const COLOR_FADE_DURATION = 4.0;  // Seconds for captured boid to fade to new flock color
+
+// AI Behavior (enemy flocks)
+const AI_STRENGTH = 0.003;        // How strongly enemies chase smaller flocks
+const AI_FLEE_STRENGTH = 0.004;   // How strongly enemies flee from larger flocks
+
+// Capture Detection (squared distance thresholds)
+const CAPTURE_RADIUS_FOOD = 0.02;   // Distance to capture food (increase for faster speeds)
+const CAPTURE_RADIUS_FLOCK = 0.02;  // Distance for flock-vs-flock capture
+
+// Boid Simulation Parameters. Use the simulator to find optimal values for your game.
+// NOTE: Distance parameters scale with triangleSize. If you change triangleSize in simulator,
+// multiply all distance params by the same factor (e.g., size 0.1 → 0.2 = 2x distances)
+// (strength params do not need to be scaled)
+const GAME_PARAMS = {
+    // Separation: Boids steer away from neighbors within this distance
+    separationDistance: 0.11,   // How close before boids repel each other
+    separationStrength: 0.051,  // How strongly boids push apart
+
+    // Alignment: Boids match velocity of neighbors within this distance
+    alignmentDistance: 0.15,    // How close before boids align direction
+    alignmentStrength: 0.1,     // How strongly boids match neighbor direction
+
+    // Cohesion: Boids steer toward center of nearby flock
+    cohesionDistance: 5.0,      // How far boids look for flock center
+    cohesionStrength: 0.002,    // How strongly boids pull together
+
+    // Visual and Arena
+    triangleSize: 0.1,          // Size of each boid triangle
+    triangleCount: STARTING_BOIDS + (STARTING_ENEMY_BOIDS * ENEMY_FLOCK_COUNT) + FOOD_COUNT,
+    colorFadeDuration: COLOR_FADE_DURATION,
+    arenaSize: ARENA_SIZE,      // Boundary size for boid containment
+
+    // Camera
+    cameraPos: [0, 0],          // Initial camera position
+    cameraZoom: 0.5,            // Initial zoom level (smaller = more zoomed out)
+};
 
 // Flock names pool (40 names)
 const FLOCK_NAMES = [
@@ -60,23 +95,6 @@ const FLOCK_NAMES = [
     "Arctic Blitz",
     "Nova Burst"
 ];
-
-const GAME_PARAMS = {
-    // Blob Preset (Scaled x3.33 for size 0.1)
-    separationDistance: 0.11,   // 0.033 * 3.33
-    separationStrength: 0.051,  // Exact from preset
-    alignmentDistance: 0.15,    // 0.047 * 3.33
-    alignmentStrength: 0.1,     // Exact from preset
-    cohesionDistance: 5.0,      // 0.3 * 3.33
-    cohesionStrength: 0.002,    // Exact from preset
-    triangleSize: 0.1,
-    triangleCount: STARTING_BOIDS + (STARTING_ENEMY_BOIDS * ENEMY_FLOCK_COUNT) + FOOD_COUNT,
-    colorFadeDuration: COLOR_FADE_DURATION,
-    arenaSize: ARENA_SIZE,      // Pass to shader for boundary logic
-    // Camera initial values
-    cameraPos: [0, 0],
-    cameraZoom: 0.5,
-};
 
 const canvas = document.querySelector("canvas");
 const engine = new BoidsEngine(canvas, GAME_PARAMS, [0, 0, 0], true);
