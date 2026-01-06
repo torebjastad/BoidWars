@@ -1,5 +1,6 @@
 
 import { BoidsEngine } from './engine.js';
+import { FLOCK_NAMES } from './flockNames.js';
 
 // ============================================================================
 // GAME TUNING PARAMETERS
@@ -46,55 +47,13 @@ const GAME_PARAMS = {
     triangleCount: STARTING_BOIDS + (STARTING_ENEMY_BOIDS * ENEMY_FLOCK_COUNT) + FOOD_COUNT,
     colorFadeDuration: COLOR_FADE_DURATION,
     arenaSize: ARENA_SIZE,      // Boundary size for boid containment
-
-    // Camera
-    cameraPos: [0, 0],          // Initial camera position
-    cameraZoom: 0.5,            // Initial zoom level (smaller = more zoomed out)
 };
 
-// Flock names pool (40 names)
-const FLOCK_NAMES = [
-    "You",              // Player
-    "Crimson Tide",
-    "Shadow Legion",
-    "Venom Swarm",
-    "Frost Fangs",
-    "Thunder Hawks",
-    "Ember Wolves",
-    "Void Hunters",
-    "Storm Riders",
-    "Iron Talons",
-    "Night Crawlers",
-    "Blaze Runners",
-    "Phantom Flock",
-    "Apex Predators",
-    "Omega Squad",
-    "Neon Vipers",
-    "Chaos Swarm",
-    "Glacier Pack",
-    "Solar Flares",
-    "Dark Matter",
-    "Cyber Sharks",
-    "Plasma Horde",
-    "Nebula Swarm",
-    "Toxic Wasps",
-    "Crystal Claws",
-    "Obsidian Wings",
-    "Quantum Drift",
-    "Savage Pulse",
-    "Binary Flock",
-    "Magma Core",
-    "Azure Storm",
-    "Primal Fury",
-    "Static Surge",
-    "Lunar Eclipse",
-    "Inferno Clan",
-    "Turbo Swarm",
-    "Vortex Squad",
-    "Crimson Dawn",
-    "Arctic Blitz",
-    "Nova Burst"
-];
+// Camera State
+const BASE_ZOOM = 0.1;        // Initial zoom level (close view)
+const MIN_ZOOM = 0.1;        // Maximum zoomed out level
+const ZOOM_EXPONENT = 0.15;   // How fast zoom changes with pack size (lower = slower)
+const CAMERA_SMOOTHING = 0.1; // Camera follow smoothness (lower = smoother)
 
 const canvas = document.querySelector("canvas");
 const engine = new BoidsEngine(canvas, GAME_PARAMS, [0, 0, 0], true);
@@ -134,11 +93,6 @@ const SPAWN_POSITIONS = generateSpawnPositions();
 // Update stride to 8 floats (32 bytes)
 const STRIDE_FLOATS = 8;
 
-// Camera state
-const BASE_ZOOM = 0.4;      // Initial zoom (close view)
-const MIN_ZOOM = 0.15;      // Max zoomed out
-const ZOOM_EXPONENT = 0.15;  // How fast zoom changes with pack size (lower = slower zoom out)
-const CAMERA_SMOOTHING = 0.1; // Lower = smoother camera
 let cameraX = 0, cameraY = 0;
 let cameraZoom = BASE_ZOOM;
 let targetZoom = BASE_ZOOM;  // Target zoom for smooth interpolation
