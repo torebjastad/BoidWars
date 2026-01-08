@@ -26,12 +26,15 @@ export class BoidsEngine {
             ...initialParams
         };
 
-        // Add listeners
-        window.addEventListener('mousedown', () => { this.params.clickState = 1; this.updateParamsBuffer(); });
-        window.addEventListener('mouseup', () => { this.params.clickState = 0; this.updateParamsBuffer(); });
-        // Touch support
-        window.addEventListener('touchstart', () => { this.params.clickState = 1; this.updateParamsBuffer(); });
-        window.addEventListener('touchend', () => { this.params.clickState = 0; this.updateParamsBuffer(); });
+        // Click handling: in game mode, use simple window listeners
+        // In simulator mode, click handling is done in simulator.js with GUI filtering
+        if (isGame) {
+            window.addEventListener('mousedown', () => { this.params.clickState = 1; this.updateParamsBuffer(); });
+            window.addEventListener('mouseup', () => { this.params.clickState = 0; this.updateParamsBuffer(); });
+            window.addEventListener('touchstart', () => { this.params.clickState = 1; this.updateParamsBuffer(); });
+            window.addEventListener('touchend', () => { this.params.clickState = 0; this.updateParamsBuffer(); });
+        }
+
         this.color = [...initialColor];
         this.isGame = isGame;
 

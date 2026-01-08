@@ -2,17 +2,17 @@
 import GUI from 'https://cdn.jsdelivr.net/npm/lil-gui@0.19/+esm';
 import { BoidsEngine } from './engine.js';
 
-const INITIAL_TRIANGLE_COUNT = 1000;
+const INITIAL_TRIANGLE_COUNT = 4000;
 const INITIAL_TRIANGLE_SIZE = 0.1;
 
-// All distances are scaled for triangleSize 0.1 (multiply old 0.03 params by 3.33)
+// Using "game" preset as default (scaled for triangleSize 0.1)
 const INITIAL_PARAMS = {
-    separationDistance: 0.17,   // 0.05 * 3.33
-    separationStrength: 0.001,
-    alignmentDistance: 1.0,     // 0.3 * 3.33
-    alignmentStrength: 0.01,
-    cohesionDistance: 1.0,      // 0.3 * 3.33
-    cohesionStrength: 0.001,
+    separationDistance: 0.11,
+    separationStrength: 0.051,
+    alignmentDistance: 0.15,
+    alignmentStrength: 0.1,
+    cohesionDistance: 5.0,
+    cohesionStrength: 0.002,
     triangleSize: INITIAL_TRIANGLE_SIZE,
     triangleCount: INITIAL_TRIANGLE_COUNT,
     cameraZoom: 0.2,            // Zoom out to see larger arena
@@ -73,7 +73,7 @@ const SIM_PRESETS = {
 };
 
 const canvas = document.querySelector("canvas");
-const engine = new BoidsEngine(canvas, INITIAL_PARAMS, COLOR_PRESETS.jeans);
+const engine = new BoidsEngine(canvas, INITIAL_PARAMS, COLOR_PRESETS.uniform);
 
 async function start() {
     const success = await engine.init();
@@ -96,16 +96,48 @@ async function start() {
             engine.setParams({ mousePos: [x, y] });
         });
 
-        canvas.addEventListener('mousedown', () => {
-            engine.setParams({ clickState: 1 });
+        // Initialize GUI first (needed for proper z-order)
+        const guiElement = initGUI();
+
+        // Helper: check if mouse position is inside GUI bounds
+        const isClickInsideGUI = (e) => {
+            const guiRect = guiElement.getBoundingClientRect();
+            return (
+                e.clientX >= guiRect.left &&
+                e.clientX <= guiRect.right &&
+                e.clientY >= guiRect.top &&
+                e.clientY <= guiRect.bottom
+            );
+        };
+
+        // Track if mouse is currently down on canvas
+        let mouseDownOnCanvas = false;
+
+        canvas.addEventListener('mousedown', (e) => {
+            // Only set clickState if click is outside the GUI area
+            if (!isClickInsideGUI(e)) {
+                mouseDownOnCanvas = true;
+                engine.setParams({ clickState: 1 });
+            }
         });
 
         canvas.addEventListener('mouseup', () => {
+            mouseDownOnCanvas = false;
             engine.setParams({ clickState: 0 });
         });
 
         canvas.addEventListener('mouseleave', () => {
-            engine.setParams({ clickState: 0 });
+            if (mouseDownOnCanvas) {
+                engine.setParams({ clickState: 0 });
+            }
+        });
+
+        // Also listen on document for mouseup in case mouse leaves canvas while pressed
+        document.addEventListener('mouseup', () => {
+            if (mouseDownOnCanvas) {
+                mouseDownOnCanvas = false;
+                engine.setParams({ clickState: 0 });
+            }
         });
 
         canvas.addEventListener('wheel', (e) => {
@@ -116,7 +148,6 @@ async function start() {
         }, { passive: false });
 
         engine.start();
-        initGUI();
     }
 }
 
@@ -125,8 +156,8 @@ function initGUI() {
 
     // Sim State for GUI to bind to (referencing engine params)
     const guiState = {
-        colorPreset: 'jeans',
-        preset: 'default'
+        colorPreset: 'uniform',
+        preset: 'game'
     };
 
     // --- Parameters Folder ---
@@ -179,6 +210,9 @@ function initGUI() {
             engine.createBindGroups();
         }
     }, 'reset').name('Randomize Positions');
+
+    // Return the GUI's DOM element so we can attach event handlers
+    return gui.domElement;
 }
 
 start();
