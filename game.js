@@ -10,12 +10,12 @@ import { FLOCK_NAMES } from './flockNames.js';
 const STARTING_BOIDS = 4;         // Player's initial flock size
 const STARTING_ENEMY_BOIDS = 4;   // Each enemy flock's starting size
 const ENEMY_FLOCK_COUNT = 15;     // Total number of enemy flocks in the game
-const FOOD_COUNT = 1000;          // Number of food boids scattered in arena
+const FOOD_COUNT = 2000;          // Number of food boids scattered in arena
 const MAX_CAPACITY = 6000;        // Maximum total entities (prevents memory issues)
 
 // Arena and Visuals
 const ARENA_SIZE = 10.0;          // Size of the playable arena (boids bounce at edges)
-const COLOR_FADE_DURATION = 4.0;  // Seconds for captured boid to fade to new flock color
+const COLOR_FADE_DURATION = 0.5;  // Seconds for captured boid to fade to new flock color
 
 // AI Behavior (enemy flocks)
 const AI_STRENGTH = 0.003;        // How strongly enemies chase smaller flocks
@@ -24,6 +24,7 @@ const AI_FLEE_STRENGTH = 0.004;   // How strongly enemies flee from larger flock
 // Capture Detection (squared distance thresholds)
 const CAPTURE_RADIUS_FOOD = 0.02;   // Distance to capture food (increase for faster speeds)
 const CAPTURE_RADIUS_FLOCK = 0.02;  // Distance for flock-vs-flock capture
+const CONSUME_RATIO = 1.2;          // Flock must be this much larger to consume another (also controls AI hunt/flee)
 
 // Boid Simulation Parameters. Use the simulator to find optimal values for your game.
 // NOTE: Distance parameters scale with triangleSize. If you change triangleSize in simulator,
@@ -39,7 +40,7 @@ const GAME_PARAMS = {
     alignmentStrength: 0.1,     // How strongly boids match neighbor direction
 
     // Cohesion: Boids steer toward center of nearby flock
-    cohesionDistance: 5.0,      // How far boids look for flock center
+    cohesionDistance: 15.0,      // How far boids look for flock center
     cohesionStrength: 0.002,    // How strongly boids pull together
 
     // Visual and Arena
@@ -50,8 +51,8 @@ const GAME_PARAMS = {
 };
 
 // Camera State
-const BASE_ZOOM = 0.1;        // Initial zoom level (close view)
-const MIN_ZOOM = 0.1;        // Maximum zoomed out level
+const BASE_ZOOM = 0.5;        // Initial zoom level (close view)
+const MIN_ZOOM = 0.15;        // Maximum zoomed out level
 const ZOOM_EXPONENT = 0.15;   // How fast zoom changes with pack size (lower = slower)
 const CAMERA_SMOOTHING = 0.1; // Camera follow smoothness (lower = smoother)
 
@@ -75,18 +76,43 @@ function generateFlocks() {
 let flocks = generateFlocks();
 let totalEntities = STARTING_BOIDS + (STARTING_ENEMY_BOIDS * ENEMY_FLOCK_COUNT) + FOOD_COUNT;
 
-// Generate spawn positions around the arena perimeter
+// Generate randomized spawn positions with minimum distance between flocks
 function generateSpawnPositions() {
-    const result = [[0, 0]]; // Player: center
-    const radius = ARENA_SIZE - 1.5;
-    for (let i = 0; i < ENEMY_FLOCK_COUNT; i++) {
-        const angle = (i / ENEMY_FLOCK_COUNT) * 2 * Math.PI;
-        result.push([
-            Math.cos(angle) * radius,
-            Math.sin(angle) * radius
-        ]);
+    const MIN_SPAWN_DISTANCE = 3.0;  // Minimum distance between flock spawn centers
+    const SPAWN_MARGIN = 1.5;        // Keep away from arena edges
+    const maxX = ARENA_SIZE - SPAWN_MARGIN;
+    const maxY = ARENA_SIZE - SPAWN_MARGIN;
+
+    const positions = [];
+    const totalFlocks = 1 + ENEMY_FLOCK_COUNT;  // Player + enemies
+
+    for (let i = 0; i < totalFlocks; i++) {
+        let attempts = 0;
+        let x, y;
+
+        // Try to find a position that's far enough from all existing positions
+        do {
+            x = (Math.random() * 2 - 1) * maxX;
+            y = (Math.random() * 2 - 1) * maxY;
+            attempts++;
+
+            // Check distance to all existing positions
+            let tooClose = false;
+            for (const [px, py] of positions) {
+                const dist = Math.sqrt((x - px) ** 2 + (y - py) ** 2);
+                if (dist < MIN_SPAWN_DISTANCE) {
+                    tooClose = true;
+                    break;
+                }
+            }
+
+            if (!tooClose) break;
+        } while (attempts < 100);  // Give up after 100 attempts
+
+        positions.push([x, y]);
     }
-    return result;
+
+    return positions;
 }
 const SPAWN_POSITIONS = generateSpawnPositions();
 
@@ -527,8 +553,6 @@ async function checkCollisions() {
     }
 
     // Step 2.1: Flock vs Flock Consumption (size-based)
-    // Any flock 1.5x larger can consume another flock's boids
-    const CONSUME_RATIO = 1.5;
     let flockCaptureOccurred = false;
 
     for (let i = 0; i < flocks.length; i++) {
