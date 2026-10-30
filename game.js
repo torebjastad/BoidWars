@@ -48,6 +48,7 @@ const GAME_PARAMS = {
     triangleCount: STARTING_BOIDS + (STARTING_ENEMY_BOIDS * ENEMY_FLOCK_COUNT) + FOOD_COUNT,
     colorFadeDuration: COLOR_FADE_DURATION,
     arenaSize: ARENA_SIZE,      // Boundary size for boid containment
+    packCount: ENEMY_FLOCK_COUNT + 2, // Player (0) + food (1) + enemies, for the GPU spatial grid
 };
 
 // Camera State

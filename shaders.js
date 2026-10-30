@@ -40,12 +40,157 @@ export const getComputeWGSL = (isGame) => {
 @group(0) @binding(1) var<storage, read> currentTriangles: array<TriangleInfo>;
 @group(0) @binding(2) var<storage, read_write> nextTriangles: array<TriangleInfo>;
 
+// --- Spatial Grid ---
+// Boids are bucketed by key = (cell, pack) with a counting sort each frame:
+// gridCount -> gridScan -> gridScatter -> gridAggregate -> gridCoarse, then mainCompute.
+// Fine cell size is >= every neighbor radius except cohesion, so separation, alignment
+// and food sensing only need the 3x3 cells around a boid. Cohesion has a much larger
+// radius, so it walks coarse blocks of coarseFactor x coarseFactor fine cells: blocks
+// fully inside the radius add their position sums, blocks that straddle it drop down to
+// fine cells, and only fine cells that straddle it check boids one by one. Results match
+// the old brute-force loop.
+struct GridParams {
+  gridMin: vec2f,
+  cellSize: f32,
+  packCount: u32,
+  dims: vec2u,
+  keyCount: u32,
+  coarseFactor: u32,
+  coarseDims: vec2u,
+  coarseKeyCount: u32,
+  pad: u32,
+};
+
+@group(1) @binding(0) var<uniform> grid: GridParams;
+@group(1) @binding(1) var<storage, read_write> cellCount: array<atomic<u32>>;
+@group(1) @binding(2) var<storage, read_write> cellStart: array<u32>;
+@group(1) @binding(3) var<storage, read_write> boidSlot: array<vec2u>;     // (key, rank within key)
+@group(1) @binding(4) var<storage, read_write> sortedIndex: array<u32>;
+@group(1) @binding(5) var<storage, read_write> cellAgg: array<vec4f>;      // (sum x, sum y, count, 0): fine keys, then coarse keys
+@group(1) @binding(6) var<storage, read_write> sortedBoids: array<vec4f>;  // (position, velocity) in key order
+
+fn packIndex(t: TriangleInfo) -> u32 {
+    ${isGame ? 'return min(u32(max(round(t.packId), 0.0)), grid.packCount - 1u);' : 'return 0u;'}
+}
+
+fn cellCoord(p: vec2f) -> vec2i {
+    let c = vec2i(floor((p - grid.gridMin) / grid.cellSize));
+    return clamp(c, vec2i(0), vec2i(grid.dims) - 1);
+}
+
+fn keyOf(c: vec2i, pack: u32) -> u32 {
+    return (u32(c.y) * grid.dims.x + u32(c.x)) * grid.packCount + pack;
+}
+
+fn coarseKeyOf(c: vec2i, pack: u32) -> u32 {
+    return (u32(c.y) * grid.coarseDims.x + u32(c.x)) * grid.packCount + pack;
+}
+
+// How much of cell c (side 'size', last index 'last') lies within 'radius' of p:
+// 0 = none, 1 = partly, 2 = all. Edge cells also hold boids clamped in from outside
+// the grid, so they are treated as unbounded and never count as fully inside.
+fn cellCoverage(p: vec2f, c: vec2i, size: f32, last: vec2i, radius: f32) -> u32 {
+    var lo = grid.gridMin + vec2f(c) * size;
+    var hi = lo + size;
+    lo = select(lo, vec2f(-1e30), c == vec2i(0));
+    hi = select(hi, vec2f(1e30), c == last);
+    if (distance(p, clamp(p, lo, hi)) >= radius) { return 0u; }
+    if (length(max(abs(p - lo), abs(p - hi))) < radius) { return 2u; }
+    return 1u;
+}
+
+@compute @workgroup_size(64)
+fn gridCount(@builtin(global_invocation_id) gid: vec3u) {
+    let i = gid.x;
+    if (i >= params.triangleCount) { return; }
+    let t = currentTriangles[i];
+    let key = keyOf(cellCoord(t.position), packIndex(t));
+    let rank = atomicAdd(&cellCount[key], 1u);
+    boidSlot[i] = vec2u(key, rank);
+}
+
+// Exclusive prefix sum of cellCount into cellStart, in a single workgroup
+var<workgroup> scanPartial: array<u32, 256>;
+
+@compute @workgroup_size(256)
+fn gridScan(@builtin(local_invocation_index) li: u32) {
+    let chunk = (grid.keyCount + 255u) / 256u;
+    let begin = li * chunk;
+    let end = min(begin + chunk, grid.keyCount);
+
+    var sum = 0u;
+    for (var k = begin; k < end; k++) {
+        sum += atomicLoad(&cellCount[k]);
+    }
+    scanPartial[li] = sum;
+    workgroupBarrier();
+
+    for (var offset = 1u; offset < 256u; offset *= 2u) {
+        var v = 0u;
+        if (li >= offset) { v = scanPartial[li - offset]; }
+        workgroupBarrier();
+        scanPartial[li] += v;
+        workgroupBarrier();
+    }
+
+    var running = scanPartial[li] - sum;
+    for (var k = begin; k < end; k++) {
+        cellStart[k] = running;
+        running += atomicLoad(&cellCount[k]);
+    }
+}
+
+@compute @workgroup_size(64)
+fn gridScatter(@builtin(global_invocation_id) gid: vec3u) {
+    let i = gid.x;
+    if (i >= params.triangleCount) { return; }
+    let slot = boidSlot[i];
+    let dst = cellStart[slot.x] + slot.y;
+    let t = currentTriangles[i];
+    sortedIndex[dst] = i;
+    sortedBoids[dst] = vec4f(t.position, t.velocity);
+}
+
+@compute @workgroup_size(64)
+fn gridAggregate(@builtin(global_invocation_id) gid: vec3u) {
+    let k = gid.x;
+    if (k >= grid.keyCount) { return; }
+    let start = cellStart[k];
+    let n = atomicLoad(&cellCount[k]);
+    var s = vec2f(0.0, 0.0);
+    for (var j = 0u; j < n; j++) {
+        s += sortedBoids[start + j].xy;
+    }
+    cellAgg[k] = vec4f(s, f32(n), 0.0);
+}
+
+// Sum fine cell aggregates into coarse blocks (stored after the fine keys)
+@compute @workgroup_size(64)
+fn gridCoarse(@builtin(global_invocation_id) gid: vec3u) {
+    let ck = gid.x;
+    if (ck >= grid.coarseKeyCount) { return; }
+    let pack = ck % grid.packCount;
+    let cell = ck / grid.packCount;
+    let block = vec2i(i32(cell % grid.coarseDims.x), i32(cell / grid.coarseDims.x));
+    let f0 = block * i32(grid.coarseFactor);
+    let f1 = min(f0 + i32(grid.coarseFactor) - 1, vec2i(grid.dims) - 1);
+    var s = vec4f(0.0);
+    for (var y = f0.y; y <= f1.y; y++) {
+        for (var x = f0.x; x <= f1.x; x++) {
+            s += cellAgg[keyOf(vec2i(x, y), pack)];
+        }
+    }
+    cellAgg[grid.keyCount + ck] = s;
+}
+
 @compute @workgroup_size(64)
 fn mainCompute(@builtin(global_invocation_id) gid: vec3u) {
-    let index = gid.x;
-    if (index >= params.triangleCount) {
+    // Threads run in key order so a workgroup's boids share cells and read the same memory
+    let mySlot = gid.x;
+    if (mySlot >= params.triangleCount) {
         return;
     }
+    let index = sortedIndex[mySlot];
 
     var instanceInfo = currentTriangles[index];
     
@@ -66,15 +211,26 @@ fn mainCompute(@builtin(global_invocation_id) gid: vec3u) {
         var attraction = vec2(0.0, 0.0);
         var closePlayers = 0u;
 
-        for (var i = 0u; i < params.triangleCount; i++) {
-            let other = currentTriangles[i];
-            // If other is NOT Food (Player or Enemy can attract food)
-            if (instanceInfo.packId > 0.5 && instanceInfo.packId < 1.5 && (other.packId < 0.5 || other.packId > 1.5)) { 
-                let dist = distance(instanceInfo.position, other.position);
-                // Sensing radius
-                if (dist < 0.8) { 
-                    attraction += other.position - instanceInfo.position;
-                    closePlayers++;
+        // Only Player or Enemy packs attract food (cellSize >= sensing radius, so 3x3 cells suffice)
+        let foodCell = cellCoord(instanceInfo.position);
+        for (var dy = -1; dy <= 1; dy++) {
+            for (var dx = -1; dx <= 1; dx++) {
+                let c = foodCell + vec2i(dx, dy);
+                if (any(c < vec2i(0)) || any(c >= vec2i(grid.dims))) { continue; }
+                for (var p = 0u; p < grid.packCount; p++) {
+                    if (p == 1u) { continue; }
+                    let key = keyOf(c, p);
+                    let start = cellStart[key];
+                    let n = atomicLoad(&cellCount[key]);
+                    for (var j = 0u; j < n; j++) {
+                        let otherPos = sortedBoids[start + j].xy;
+                        let dist = distance(instanceInfo.position, otherPos);
+                        // Sensing radius
+                        if (dist < 0.8) {
+                            attraction += otherPos - instanceInfo.position;
+                            closePlayers++;
+                        }
+                    }
                 }
             }
         }
@@ -106,26 +262,94 @@ fn mainCompute(@builtin(global_invocation_id) gid: vec3u) {
 
     ${isGame ? 'let myPack = instanceInfo.packId;' : ''}
 
-    for (var i = 0u; i < params.triangleCount; i = i + 1) {
-        if (i == index) {
-            continue;
-        }
-        let other = currentTriangles[i];
-        
-        ${isGame ? 'if (abs(other.packId - myPack) > 0.1) { continue; }' : ''}
+    let pos = instanceInfo.position;
+    let myCell = cellCoord(pos);
+    let myPackIdx = packIndex(instanceInfo);
+    let myKey = keyOf(myCell, myPackIdx);
+    let lastCell = vec2i(grid.dims) - 1;
 
-        let dist = distance(instanceInfo.position, other.position);
+    // Separation + alignment: own pack in the 3x3 neighboring cells
+    for (var dy = -1; dy <= 1; dy++) {
+        for (var dx = -1; dx <= 1; dx++) {
+            let c = myCell + vec2i(dx, dy);
+            if (any(c < vec2i(0)) || any(c > lastCell)) { continue; }
+            let key = keyOf(c, myPackIdx);
+            let start = cellStart[key];
+            let n = atomicLoad(&cellCount[key]);
+            for (var j = 0u; j < n; j++) {
+                if (start + j == mySlot) { continue; }
+                let other = sortedBoids[start + j];
+                let dist = distance(pos, other.xy);
+                if (dist < params.separationDistance) {
+                    separation += pos - other.xy;
+                }
+                if (dist < params.alignmentDistance) {
+                    alignment += other.zw;
+                    alignmentCount++;
+                }
+            }
+        }
+    }
 
-        if (dist < params.separationDistance) {
-            separation += instanceInfo.position - other.position;
-        }
-        if (dist < params.alignmentDistance) {
-            alignment += other.velocity;
-            alignmentCount++;
-        }
-        if (dist < params.cohesionDistance) {
-            cohesion += other.position;
-            cohesionCount++;
+    // Cohesion: block/cell sums where fully in range, per-boid checks on the rim
+    let coh = params.cohesionDistance;
+    let k = i32(grid.coarseFactor);
+    let blockSize = grid.cellSize * f32(k);
+    let lastBlock = vec2i(grid.coarseDims) - 1;
+    let myBlock = myCell / k;
+    let cohRange = i32(ceil(coh / blockSize));
+    let bMin = max(myBlock - vec2i(cohRange), vec2i(0));
+    let bMax = min(myBlock + vec2i(cohRange), lastBlock);
+    for (var by = bMin.y; by <= bMax.y; by++) {
+        for (var bx = bMin.x; bx <= bMax.x; bx++) {
+            let b = vec2i(bx, by);
+            let blockAgg = cellAgg[grid.keyCount + coarseKeyOf(b, myPackIdx)];
+            if (blockAgg.z == 0.0) { continue; }
+            let blockCover = cellCoverage(pos, b, blockSize, lastBlock, coh);
+            if (blockCover == 0u) { continue; }
+            if (blockCover == 2u) {
+                let agg = blockAgg;
+                cohesion += agg.xy;
+                cohesionCount += u32(agg.z);
+                if (all(b == myBlock)) {
+                    cohesion -= pos;
+                    cohesionCount--;
+                }
+                continue;
+            }
+
+            let f0 = b * k;
+            let f1 = min(f0 + k - 1, lastCell);
+            for (var cy = f0.y; cy <= f1.y; cy++) {
+                for (var cx = f0.x; cx <= f1.x; cx++) {
+                    let c = vec2i(cx, cy);
+                    let key = keyOf(c, myPackIdx);
+                    let n = atomicLoad(&cellCount[key]);
+                    if (n == 0u) { continue; }
+                    let cover = cellCoverage(pos, c, grid.cellSize, lastCell, coh);
+                    if (cover == 0u) { continue; }
+                    if (cover == 2u) {
+                        let agg = cellAgg[key];
+                        cohesion += agg.xy;
+                        cohesionCount += u32(agg.z);
+                        if (key == myKey) {
+                            cohesion -= pos;
+                            cohesionCount--;
+                        }
+                        continue;
+                    }
+
+                    let start = cellStart[key];
+                    for (var j = 0u; j < n; j++) {
+                        if (start + j == mySlot) { continue; }
+                        let otherPos = sortedBoids[start + j].xy;
+                        if (distance(pos, otherPos) < coh) {
+                            cohesion += otherPos;
+                            cohesionCount++;
+                        }
+                    }
+                }
+            }
         }
     }
 

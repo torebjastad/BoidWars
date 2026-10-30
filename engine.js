@@ -15,6 +15,11 @@ import { getComputeWGSL, getRenderWGSL, getArenaBorderWGSL, getArenaGridWGSL } f
 // arenaSize (72) (f32)
 export const PARAMS_SIZE_BYTES = 80; // Includes camera, aspect ratio, and arena size params
 
+// Spatial grid (neighbor search) tuning
+const SPATIAL_GRID_MAX_DIM = 96;        // Max cells per axis
+const SPATIAL_GRID_MARGIN = 0.25;       // Extra world space around the arena for overshooting boids
+const FOOD_SENSE_RADIUS = 0.8;          // Must match the food sensing radius in shaders.js
+
 export class BoidsEngine {
     constructor(canvas, initialParams, initialColor, isGame = false) {
         this.canvas = canvas;
@@ -51,8 +56,24 @@ export class BoidsEngine {
         this.triangleVertexBuffer = null;
         this.triangleBufferA = null;
         this.triangleBufferB = null;
+        this.allocatedCount = 0;  // Boid capacity of the current triangle buffers
         this.bindGroupA = null;
         this.bindGroupB = null;
+
+        // Spatial grid resources (compute neighbor search)
+        this.spatialPipelines = null;
+        this.spatialBindGroupLayout = null;
+        this.spatialBindGroup = null;
+        this.spatialParamsBuffer = null;
+        this.spatialKeyCapacity = 0;
+        this.spatialKeyCount = 0;
+        this.spatialCoarseKeyCount = 0;
+        this.cellCountBuffer = null;
+        this.cellStartBuffer = null;
+        this.cellAggBuffer = null;
+        this.boidSlotBuffer = null;
+        this.sortedIndexBuffer = null;
+        this.sortedBoidsBuffer = null;
 
         // Border resources (game mode only)
         this.borderPipeline = null;
@@ -174,10 +195,34 @@ export class BoidsEngine {
 
         const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [this.bindGroupLayout] });
 
-        this.computePipeline = device.createComputePipeline({
-            layout: pipelineLayout,
-            compute: { module: computeModule, entryPoint: "mainCompute" },
+        this.spatialBindGroupLayout = device.createBindGroupLayout({
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+            ]
         });
+
+        const computeLayout = device.createPipelineLayout({
+            bindGroupLayouts: [this.bindGroupLayout, this.spatialBindGroupLayout]
+        });
+        const makeCompute = (entryPoint) => device.createComputePipeline({
+            layout: computeLayout,
+            compute: { module: computeModule, entryPoint },
+        });
+
+        this.spatialPipelines = {
+            count: makeCompute("gridCount"),
+            scan: makeCompute("gridScan"),
+            scatter: makeCompute("gridScatter"),
+            aggregate: makeCompute("gridAggregate"),
+            coarse: makeCompute("gridCoarse"),
+        };
+        this.computePipeline = makeCompute("mainCompute");
 
         this.renderPipeline = device.createRenderPipeline({
             layout: pipelineLayout,
@@ -299,6 +344,7 @@ export class BoidsEngine {
 
         const stride = this.isGame ? 32 : 16;
         const byteSize = count * stride;
+        this.allocatedCount = count;
 
         let data;
         if (initialDataArray) {
@@ -333,6 +379,114 @@ export class BoidsEngine {
 
         this.device.queue.writeBuffer(this.triangleBufferA, 0, data);
         this.device.queue.writeBuffer(this.triangleBufferB, 0, data);
+
+        // Per-boid spatial grid buffers (min size 16 so empty flocks still bind)
+        if (this.boidSlotBuffer) this.boidSlotBuffer.destroy();
+        if (this.sortedIndexBuffer) this.sortedIndexBuffer.destroy();
+        if (this.sortedBoidsBuffer) this.sortedBoidsBuffer.destroy();
+        this.sortedBoidsBuffer = this.device.createBuffer({
+            size: Math.max(16, count * 16),
+            usage: GPUBufferUsage.STORAGE,
+        });
+        this.boidSlotBuffer = this.device.createBuffer({
+            size: Math.max(16, count * 8),
+            usage: GPUBufferUsage.STORAGE,
+        });
+        this.sortedIndexBuffer = this.device.createBuffer({
+            size: Math.max(16, count * 4),
+            usage: GPUBufferUsage.STORAGE,
+        });
+    }
+
+    // Pick grid cell size and dimensions from the current params, and grow the
+    // per-key buffers if needed. Cell size must cover every radius searched in the 3x3 neighborhood.
+    updateSpatialGrid() {
+        const p = this.params;
+        const halfExtent = this.isGame
+            ? (p.arenaSize || 4.0) + SPATIAL_GRID_MARGIN
+            : 5.0 + p.triangleSize + SPATIAL_GRID_MARGIN;  // Simulator wraps at 5 + triangleSize
+        const extent = halfExtent * 2;
+
+        const cellSize = Math.max(
+            p.separationDistance,
+            p.alignmentDistance,
+            this.isGame ? FOOD_SENSE_RADIUS : 0,
+            extent / SPATIAL_GRID_MAX_DIM,
+        );
+        const dim = Math.ceil(extent / cellSize);
+        // Coarse blocks of coarseFactor x coarseFactor fine cells, for the large cohesion radius.
+        // With r = cohesion radius in fine cells, a boid visits ~4(r/k)^2 blocks plus ~2*pi*r*k fine
+        // cells on the rim; that total is smallest near k = cbrt(1.3 * r).
+        const cohesionCells = p.cohesionDistance / cellSize;
+        const coarseFactor = Math.min(dim, Math.max(1, Math.round(Math.cbrt(1.3 * cohesionCells))));
+        const coarseDim = Math.ceil(dim / coarseFactor);
+        const packCount = this.isGame ? (p.packCount || 32) : 1;
+        const keyCount = dim * dim * packCount;
+        const coarseKeyCount = coarseDim * coarseDim * packCount;
+        this.spatialKeyCount = keyCount;
+        this.spatialCoarseKeyCount = coarseKeyCount;
+
+        const device = this.device;
+        if (!this.spatialParamsBuffer) {
+            this.spatialParamsBuffer = device.createBuffer({
+                size: 48,
+                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            });
+        }
+        const data = new ArrayBuffer(48);
+        const view = new DataView(data);
+        view.setFloat32(0, -halfExtent, true);
+        view.setFloat32(4, -halfExtent, true);
+        view.setFloat32(8, cellSize, true);
+        view.setUint32(12, packCount, true);
+        view.setUint32(16, dim, true);
+        view.setUint32(20, dim, true);
+        view.setUint32(24, keyCount, true);
+        view.setUint32(28, coarseFactor, true);
+        view.setUint32(32, coarseDim, true);
+        view.setUint32(36, coarseDim, true);
+        view.setUint32(40, coarseKeyCount, true);
+        device.queue.writeBuffer(this.spatialParamsBuffer, 0, data);
+
+        if (keyCount > this.spatialKeyCapacity) {
+            if (this.cellCountBuffer) this.cellCountBuffer.destroy();
+            if (this.cellStartBuffer) this.cellStartBuffer.destroy();
+            if (this.cellAggBuffer) this.cellAggBuffer.destroy();
+            this.cellCountBuffer = device.createBuffer({
+                size: keyCount * 4,
+                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+            });
+            this.cellStartBuffer = device.createBuffer({ size: keyCount * 4, usage: GPUBufferUsage.STORAGE });
+            // Fine aggregates followed by coarse ones (never more coarse keys than fine keys)
+            this.cellAggBuffer = device.createBuffer({ size: keyCount * 2 * 16, usage: GPUBufferUsage.STORAGE });
+            this.spatialKeyCapacity = keyCount;
+            if (this.triangleBufferA && this.spatialBindGroupLayout) this.createBindGroups();
+        }
+    }
+
+    // Rebuild the spatial grid from `bindGroup`'s current buffer, then step the simulation
+    encodeCompute(commandEncoder, bindGroup) {
+        const count = this.params.triangleCount;
+        const boidWorkgroups = Math.ceil(count / 64);
+
+        commandEncoder.clearBuffer(this.cellCountBuffer, 0, this.spatialKeyCount * 4);
+
+        const pass = commandEncoder.beginComputePass();
+        pass.setBindGroup(0, bindGroup);
+        pass.setBindGroup(1, this.spatialBindGroup);
+        pass.setPipeline(this.spatialPipelines.count);
+        pass.dispatchWorkgroups(boidWorkgroups);
+        pass.setPipeline(this.spatialPipelines.scan);
+        pass.dispatchWorkgroups(1);
+        pass.setPipeline(this.spatialPipelines.scatter);
+        pass.dispatchWorkgroups(boidWorkgroups);
+        pass.setPipeline(this.spatialPipelines.aggregate);
+        pass.dispatchWorkgroups(Math.ceil(this.spatialKeyCount / 64));
+        pass.setPipeline(this.spatialPipelines.coarse);
+        pass.dispatchWorkgroups(Math.ceil(this.spatialCoarseKeyCount / 64));
+        pass.setPipeline(this.computePipeline);
+        pass.dispatchWorkgroups(boidWorkgroups);
+        pass.end();
     }
 
     createBindGroups() {
@@ -353,6 +507,19 @@ export class BoidsEngine {
                 { binding: 1, resource: { buffer: this.triangleBufferB } },
                 { binding: 2, resource: { buffer: this.triangleBufferA } },
                 { binding: 3, resource: { buffer: this.colorPaletteBuffer } },
+            ]
+        });
+
+        this.spatialBindGroup = this.device.createBindGroup({
+            layout: this.spatialBindGroupLayout,
+            entries: [
+                { binding: 0, resource: { buffer: this.spatialParamsBuffer } },
+                { binding: 1, resource: { buffer: this.cellCountBuffer } },
+                { binding: 2, resource: { buffer: this.cellStartBuffer } },
+                { binding: 3, resource: { buffer: this.boidSlotBuffer } },
+                { binding: 4, resource: { buffer: this.sortedIndexBuffer } },
+                { binding: 5, resource: { buffer: this.cellAggBuffer } },
+                { binding: 6, resource: { buffer: this.sortedBoidsBuffer } },
             ]
         });
     }
@@ -389,6 +556,7 @@ export class BoidsEngine {
         view.setFloat32(72, p.arenaSize || 4.0, true);
 
         this.device.queue.writeBuffer(this.paramsBuffer, 0, data);
+        this.updateSpatialGrid();
     }
 
     updateColorBuffer() {
@@ -407,14 +575,11 @@ export class BoidsEngine {
     }
 
     setParams(newParams) {
-        let countChanged = false;
-        if (newParams.triangleCount !== undefined && newParams.triangleCount !== this.params.triangleCount) {
-            countChanged = true;
-        }
-
         Object.assign(this.params, newParams);
 
-        if (countChanged && !this.isGame) {
+        // Compare against the allocated size, not the old param: the simulator GUI writes
+        // triangleCount straight into this.params before calling setParams(this.params)
+        if (!this.isGame && this.params.triangleCount !== this.allocatedCount) {
             this.initTriangleBuffers(this.params.triangleCount);
             this.createBindGroups();
         }
@@ -462,12 +627,7 @@ export class BoidsEngine {
         const useBindGroupA = this.frameCount % 2 === 0;
         const currentBindGroup = useBindGroupA ? this.bindGroupA : this.bindGroupB;
 
-        const computePass = commandEncoder.beginComputePass();
-        computePass.setPipeline(this.computePipeline);
-        computePass.setBindGroup(0, currentBindGroup);
-        const workgroupCount = Math.ceil(this.params.triangleCount / 64);
-        computePass.dispatchWorkgroups(workgroupCount);
-        computePass.end();
+        this.encodeCompute(commandEncoder, currentBindGroup);
 
         const renderPass = commandEncoder.beginRenderPass({
             colorAttachments: [{
