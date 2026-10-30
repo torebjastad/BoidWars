@@ -20,6 +20,11 @@ struct SimParams {
   cameraZoom: f32,
   aspectRatio: f32, // width / height
   arenaSize: f32,   // Arena boundary size
+  foodRadius: f32,  // Game: food is drawn toward flock boids within this distance
+  captureRadius: f32, // Game: touching boids interact (food is eaten, smaller flocks are eaten)
+  digestTime: f32,    // Game: a boid that just switched flocks can't convert others for this long
+  spill: f32,         // Game: share of eaten boids that burst out as food instead of joining the eater
+  foodValue: f32,     // Game: chance an eaten food becomes a boid (otherwise it is used up)
 };
 
 struct TriangleInfo {
@@ -28,7 +33,7 @@ struct TriangleInfo {
   ${isGame ? 'packId: f32,' : ''}
   ${isGame ? 'captureTime: f32,' : ''} 
   ${isGame ? 'prevPackId: f32,' : ''}  // Previous pack for color fade 
-  ${isGame ? 'padC: f32,' : ''} 
+  ${isGame ? 'inertUntil: f32,' : ''}  // Shed food ignores its previous pack until this time
 };
 `;
 
@@ -39,7 +44,19 @@ export const getComputeWGSL = (isGame) => {
 @group(0) @binding(0) var<uniform> params: SimParams;
 @group(0) @binding(1) var<storage, read> currentTriangles: array<TriangleInfo>;
 @group(0) @binding(2) var<storage, read_write> nextTriangles: array<TriangleInfo>;
-
+${isGame ? `
+// Per-pack steering set by game.js every frame (player input and enemy AI)
+struct PackControl {
+  goal: vec2f,          // Boids steer toward this point
+  steer: f32,           // Steering force per step (0 = drift)
+  maxSpeed: f32,        // Speed cap (smaller flocks are faster, dash raises it)
+  cohesionScale: f32,   // Multiplies cohesion (pulse: 0 while expanding, >1 while contracting)
+  spread: f32,          // Outward push from the flock center (pulse)
+  eatenBy: u32,         // Bit p set: pack p is big enough to eat this pack
+  pad: f32,
+};
+@group(0) @binding(4) var<uniform> packControls: array<PackControl, 32>;
+` : ''}
 // --- Spatial Grid ---
 // Boids are bucketed by key = (cell, pack) with a counting sort each frame:
 // gridCount -> gridScan -> gridScatter -> gridAggregate -> gridCoarse, then mainCompute.
@@ -69,8 +86,10 @@ struct GridParams {
 @group(1) @binding(5) var<storage, read_write> cellAgg: array<vec4f>;      // (sum x, sum y, count, 0): fine keys, then coarse keys
 @group(1) @binding(6) var<storage, read_write> sortedBoids: array<vec4f>;  // (position, velocity) in key order
 
+// Game: packId -1 marks an unused slot; those go to the last pack bucket, which nothing queries
 fn packIndex(t: TriangleInfo) -> u32 {
-    ${isGame ? 'return min(u32(max(round(t.packId), 0.0)), grid.packCount - 1u);' : 'return 0u;'}
+    ${isGame ? `if (t.packId < -0.5) { return grid.packCount - 1u; }
+    return min(u32(round(t.packId)), grid.packCount - 1u);` : 'return 0u;'}
 }
 
 fn cellCoord(p: vec2f) -> vec2i {
@@ -196,29 +215,41 @@ fn mainCompute(@builtin(global_invocation_id) gid: vec3u) {
     
     // --- Food Physics (Pack 1) ---
     ${isGame ? `
+    // Unused slot: keep as is
+    if (instanceInfo.packId < -0.5) {
+        nextTriangles[index] = instanceInfo;
+        return;
+    }
+
     if (instanceInfo.packId > 0.5 && instanceInfo.packId < 1.5) {  // Only Food (packId 1)
         // Idle: small circular motion
         // Rotate velocity slightly
-        let rotSpeed = 0.1;
+        let rotSpeed = select(0.0, 0.1, length(instanceInfo.velocity) < 0.0055);  // Only drifting food circles
         let c = cos(rotSpeed);
         let s = sin(rotSpeed);
         let oldV = instanceInfo.velocity;
         instanceInfo.velocity.x = oldV.x * c - oldV.y * s;
         instanceInfo.velocity.y = oldV.x * s + oldV.y * c;
-        instanceInfo.velocity = normalize(instanceInfo.velocity) * 0.005; // Base drift speed
+        // Base drift speed; faster food (thrown out by a shedding flock) slows down to it
+        let foodSpeed = max(length(instanceInfo.velocity) * 0.96, 0.005);
+        instanceInfo.velocity = normalize(instanceInfo.velocity) * foodSpeed;
 
         // Attraction to Player Pack (Pack 0)
         var attraction = vec2(0.0, 0.0);
         var closePlayers = 0u;
 
-        // Only Player or Enemy packs attract food (cellSize >= sensing radius, so 3x3 cells suffice)
+        // Only Player or Enemy packs attract food (cellSize >= sensing radius, so 3x3 cells suffice).
+        // Freshly shed food ignores the flock that shed it for a moment.
+        let ignorePack = select(-1, i32(round(instanceInfo.prevPackId)), params.time < instanceInfo.inertUntil);
+        var eatenBy = -1;
+        var eatenDist = params.captureRadius;
         let foodCell = cellCoord(instanceInfo.position);
         for (var dy = -1; dy <= 1; dy++) {
             for (var dx = -1; dx <= 1; dx++) {
                 let c = foodCell + vec2i(dx, dy);
                 if (any(c < vec2i(0)) || any(c >= vec2i(grid.dims))) { continue; }
-                for (var p = 0u; p < grid.packCount; p++) {
-                    if (p == 1u) { continue; }
+                for (var p = 0u; p < grid.packCount - 1u; p++) {
+                    if (p == 1u || i32(p) == ignorePack) { continue; }
                     let key = keyOf(c, p);
                     let start = cellStart[key];
                     let n = atomicLoad(&cellCount[key]);
@@ -226,13 +257,27 @@ fn mainCompute(@builtin(global_invocation_id) gid: vec3u) {
                         let otherPos = sortedBoids[start + j].xy;
                         let dist = distance(instanceInfo.position, otherPos);
                         // Sensing radius
-                        if (dist < 0.8) {
+                        if (dist < params.foodRadius) {
                             attraction += otherPos - instanceInfo.position;
                             closePlayers++;
+                        }
+                        if (dist < eatenDist) {
+                            eatenBy = i32(p);
+                            eatenDist = dist;
                         }
                     }
                 }
             }
+        }
+
+        // Touched by a flock boid: this food joins that flock, or is used up
+        if (eatenBy >= 0) {
+            let roll = fract(sin(f32(index) * 12.9898 + params.time * 78.233) * 43758.5453);
+            instanceInfo.prevPackId = instanceInfo.packId;
+            instanceInfo.packId = select(-1.0, f32(eatenBy), roll < params.foodValue);
+            instanceInfo.captureTime = params.time;
+            nextTriangles[index] = instanceInfo;
+            return;
         }
 
         if (closePlayers > 0u) {
@@ -242,11 +287,12 @@ fn mainCompute(@builtin(global_invocation_id) gid: vec3u) {
             instanceInfo.velocity = normalize(instanceInfo.velocity) * 0.02; 
         }
         
+        // Keep food inside the (possibly shrinking) arena
         let bound = params.arenaSize;
-        if (instanceInfo.position.x > bound) { instanceInfo.velocity.x = -abs(instanceInfo.velocity.x); }
-        if (instanceInfo.position.x < -bound) { instanceInfo.velocity.x = abs(instanceInfo.velocity.x); }
-        if (instanceInfo.position.y > bound) { instanceInfo.velocity.y = -abs(instanceInfo.velocity.y); }
-        if (instanceInfo.position.y < -bound) { instanceInfo.velocity.y = abs(instanceInfo.velocity.y); }
+        if (instanceInfo.position.x > bound) { instanceInfo.position.x = bound; instanceInfo.velocity.x = -abs(instanceInfo.velocity.x); }
+        if (instanceInfo.position.x < -bound) { instanceInfo.position.x = -bound; instanceInfo.velocity.x = abs(instanceInfo.velocity.x); }
+        if (instanceInfo.position.y > bound) { instanceInfo.position.y = bound; instanceInfo.velocity.y = -abs(instanceInfo.velocity.y); }
+        if (instanceInfo.position.y < -bound) { instanceInfo.position.y = -bound; instanceInfo.velocity.y = abs(instanceInfo.velocity.y); }
         
         instanceInfo.position += instanceInfo.velocity;
         nextTriangles[index] = instanceInfo;
@@ -259,8 +305,6 @@ fn mainCompute(@builtin(global_invocation_id) gid: vec3u) {
     var alignmentCount = 0u;
     var cohesion = vec2(0.0, 0.0);
     var cohesionCount = 0u;
-
-    ${isGame ? 'let myPack = instanceInfo.packId;' : ''}
 
     let pos = instanceInfo.position;
     let myCell = cellCoord(pos);
@@ -360,29 +404,26 @@ fn mainCompute(@builtin(global_invocation_id) gid: vec3u) {
         cohesion = (cohesion / f32(cohesionCount)) - instanceInfo.position;
     }
 
+    ${isGame ? `
+    // Player input / enemy AI steering for this pack
+    let ctrl = packControls[myPackIdx];
+    var force = (separation * params.separationStrength) +
+                (alignment * params.alignmentStrength) +
+                (cohesion * params.cohesionStrength * ctrl.cohesionScale);
+    let cohesionLen = length(cohesion);
+    if (ctrl.spread > 0.0 && cohesionLen > 1e-4) {
+        force -= (cohesion / cohesionLen) * ctrl.spread;
+    }
+    let toTarget = ctrl.goal - instanceInfo.position;
+    if (ctrl.steer > 0.0 && length(toTarget) > 0.05) {
+        force += normalize(toTarget) * ctrl.steer;
+    }
+    let maxSpeed = ctrl.maxSpeed;
+    ` : `
     var force = (separation * params.separationStrength) +
                 (alignment * params.alignmentStrength) +
                 (cohesion * params.cohesionStrength);
-    
-    // --- Game Logic: Mouse Attraction (Player Pack 0) ---
-    ${isGame ? `
-    if (params.gameMode == 1u && myPack < 0.5) {
-        let targetPos = params.mousePos; 
-        
-        // Mouse Attraction
-        let mouseDir = targetPos - instanceInfo.position;
-        let distToMouse = length(mouseDir);
-        
-        // Gentle steering towards mouse ONLY IF CLICKED
-        // params.clickState == 1
-        if (params.clickState == 1u) {
-             if (distToMouse > 0.05) { 
-                // Stronger pull when active
-                force += normalize(mouseDir) * 0.02; 
-            }
-        }
-    }
-    ` : `
+
     // Simulator mode: all boids attracted to mouse when clicked
     if (params.clickState == 1u) {
         let mouseDir = params.mousePos - instanceInfo.position;
@@ -391,12 +432,55 @@ fn mainCompute(@builtin(global_invocation_id) gid: vec3u) {
             force += normalize(mouseDir) * 0.02;
         }
     }
+    let maxSpeed = 0.06;
     `}
 
     instanceInfo.velocity += force;
-    
-    let maxSpeed = ${isGame ? '0.06' : '0.06'}; 
-    instanceInfo.velocity = normalize(instanceInfo.velocity) * clamp(length(instanceInfo.velocity), 0.0, maxSpeed);
+    let speed = length(instanceInfo.velocity);
+    if (speed > maxSpeed) {
+        instanceInfo.velocity *= maxSpeed / speed;
+    }
+
+    ${isGame ? `
+    // Touching a boid of a pack that can eat ours: this boid joins that pack. Boids that only just
+    // joined their pack can't convert yet, so eating happens where flocks touch instead of
+    // spreading through the whole victim flock at once.
+    if (ctrl.eatenBy != 0u) {
+        var eater = -1;
+        for (var dy = -1; dy <= 1; dy++) {
+            for (var dx = -1; dx <= 1; dx++) {
+                let c = myCell + vec2i(dx, dy);
+                if (any(c < vec2i(0)) || any(c > lastCell)) { continue; }
+                for (var p = 0u; p < grid.packCount - 1u; p++) {
+                    if (((ctrl.eatenBy >> p) & 1u) == 0u) { continue; }
+                    let key = keyOf(c, p);
+                    let start = cellStart[key];
+                    let n = atomicLoad(&cellCount[key]);
+                    for (var j = 0u; j < n; j++) {
+                        if (distance(pos, sortedBoids[start + j].xy) < params.captureRadius &&
+                            params.time - currentTriangles[sortedIndex[start + j]].captureTime >= params.digestTime) {
+                            eater = i32(p);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if (eater >= 0) {
+            instanceInfo.captureTime = params.time;
+            let roll = fract(sin(f32(index) * 12.9898 + params.time * 78.233) * 43758.5453);
+            if (roll < params.spill) {
+                // Spilled as food the eater can't grab for a second (the victim can)
+                instanceInfo.prevPackId = f32(eater);
+                instanceInfo.packId = 1.0;
+                instanceInfo.inertUntil = params.time + 1.0;
+            } else {
+                instanceInfo.prevPackId = instanceInfo.packId;
+                instanceInfo.packId = f32(eater);
+            }
+        }
+    }
+    ` : ''}
 
     // Boundary Logic
     ${isGame ? `
@@ -496,6 +580,10 @@ fn mainVert(@builtin(instance_index) ii: u32, @location(0) v: vec2f) -> VertexOu
     // Camera transform: center on cameraPos, apply zoom, correct aspect ratio
     pos.x = (worldPos.x - params.cameraPos.x) * params.cameraZoom / params.aspectRatio;
     pos.y = (worldPos.y - params.cameraPos.y) * params.cameraZoom;
+    // Unused slot: push outside the clip volume
+    if (instanceInfo.packId < -0.5) {
+        pos = vec4(0.0, 0.0, 2.0, 1.0);
+    }
     ` : `
     // Simulator mode: simple zoom (no camera pan)
     pos.x = worldPos.x * params.cameraZoom / params.aspectRatio;
@@ -649,8 +737,10 @@ fn gridVert(@builtin(vertex_index) vi: u32) -> VertexOutput {
     let arena = params.arenaSize;
     let spacing = params.gridSpacing;
     
-    // Calculate grid line count (how many lines in each direction)
+    // Calculate grid line count (how many lines in each direction).
+    // Lines sit on world multiples of spacing so they stay put while the arena shrinks.
     let lineCount = u32(arena * 2.0 / spacing) + 1u;
+    let first = ceil(-arena / spacing) * spacing;
     
     // Determine if this is a horizontal or vertical line
     let totalHorizontalVerts = lineCount * 2u;
@@ -662,14 +752,14 @@ fn gridVert(@builtin(vertex_index) vi: u32) -> VertexOutput {
         // Horizontal lines
         let lineIdx = vi / 2u;
         let isEnd = (vi % 2u) == 1u;
-        let y = -arena + f32(lineIdx) * spacing;
+        let y = min(first + f32(lineIdx) * spacing, arena);
         worldPos = vec2f(select(-arena, arena, isEnd), y);
     } else {
         // Vertical lines
         let adjustedVi = vi - totalHorizontalVerts;
         let lineIdx = adjustedVi / 2u;
         let isEnd = (adjustedVi % 2u) == 1u;
-        let x = -arena + f32(lineIdx) * spacing;
+        let x = min(first + f32(lineIdx) * spacing, arena);
         worldPos = vec2f(x, select(-arena, arena, isEnd));
     }
     
