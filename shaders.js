@@ -805,5 +805,37 @@ fn gridFrag(@location(0) color: vec4f) -> @location(0) vec4f {
 `;
 
 // Backwards compatibility for Sim
+// Game: apply a batch of CPU-side boid edits (captures, food spawns, shedding) to both ping-pong
+// buffers in one pass. Each patch sets the floats of one boid whose bit is set in its mask.
+export const getPatchWGSL = () => /* wgsl */`
+struct Patch {
+  index: u32,
+  mask: u32,
+  pad0: u32,
+  pad1: u32,
+  lo: vec4f,
+  hi: vec4f,
+};
+
+@group(0) @binding(0) var<storage, read_write> trianglesA: array<f32>;
+@group(0) @binding(1) var<storage, read_write> trianglesB: array<f32>;
+@group(0) @binding(2) var<storage, read> patches: array<Patch>;
+@group(0) @binding(3) var<uniform> patchCount: vec4u;
+
+@compute @workgroup_size(64)
+fn applyPatches(@builtin(global_invocation_id) gid: vec3u) {
+    if (gid.x >= patchCount.x) { return; }
+    let p = patches[gid.x];
+    let base = p.index * 8u;
+    for (var k = 0u; k < 8u; k++) {
+        if ((p.mask & (1u << k)) == 0u) { continue; }
+        var v: f32;
+        if (k < 4u) { v = p.lo[k]; } else { v = p.hi[k - 4u]; }
+        trianglesA[base + k] = v;
+        trianglesB[base + k] = v;
+    }
+}
+`;
+
 export const computeWGSL = getComputeWGSL(false);
 export const renderWGSL = getRenderWGSL(false);

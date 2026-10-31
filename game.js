@@ -594,15 +594,15 @@ const hashHead = new Int32Array(HASH_DIM * HASH_DIM);
 const hashNext = new Int32Array(CAPACITY);
 const packOf = new Int16Array(CAPACITY);
 const ownNear = new Uint8Array(CAPACITY);
+const cellXOf = new Int16Array(CAPACITY);    // Hash cell of each boid in the current snapshot
+const cellYOf = new Int16Array(CAPACITY);
 const converted = new Uint8Array(CAPACITY);
 
 const FOOD_GRID_CELL = 1.0;
 const FOOD_GRID_DIM = Math.ceil((2 * ARENA_START) / FOOD_GRID_CELL);
 
-function hashCell(x, y) {
-    const cx = Math.min(HASH_DIM - 1, Math.max(0, Math.floor((x + HASH_HALF) / HASH_CELL)));
-    const cy = Math.min(HASH_DIM - 1, Math.max(0, Math.floor((y + HASH_HALF) / HASH_CELL)));
-    return [cx, cy];
+function hashCoord(v) {
+    return Math.min(HASH_DIM - 1, Math.max(0, Math.floor((v + HASH_HALF) / HASH_CELL)));
 }
 
 async function runCheck() {
@@ -611,7 +611,9 @@ async function runCheck() {
     try {
         const data = await engine.readData();
         if (!data || myGame !== gameId) return;
+        const t0 = performance.now();
         applyRules(data, engine.lastReadSimTime - game.startSim, engine.lastReadSimTime);
+        game.rulesMs = performance.now() - t0;   // Exposed for profiling via window.__game
     } finally {
         checkInFlight = false;
     }
@@ -644,7 +646,9 @@ function applyRules(data, t, simNow) {
                 if (pack === PLAYER) game.eaten++;
             }
         }
-        const [cx, cy] = hashCell(data[base], data[base + 1]);
+        const cx = hashCoord(data[base]), cy = hashCoord(data[base + 1]);
+        cellXOf[i] = cx;
+        cellYOf[i] = cy;
         const h = cy * HASH_DIM + cx;
         hashNext[i] = hashHead[h];
         hashHead[h] = i;
@@ -690,26 +694,45 @@ function applyRules(data, t, simNow) {
     // --- Who is a straggler: flock boids with no flockmate within ISOLATION_RADIUS ---
     const iso2 = ISOLATION_RADIUS * ISOLATION_RADIUS;
     const cap2 = CAPTURE_RADIUS * CAPTURE_RADIUS;
-    const forNeighbors = (i, fn) => {
-        const [cx, cy] = hashCell(data[i * STRIDE], data[i * STRIDE + 1]);
-        for (let y = Math.max(0, cy - 1); y <= Math.min(HASH_DIM - 1, cy + 1); y++) {
-            for (let x = Math.max(0, cx - 1); x <= Math.min(HASH_DIM - 1, cx + 1); x++) {
-                for (let j = hashHead[y * HASH_DIM + x]; j !== -1; j = hashNext[j]) {
-                    if (j !== i) fn(j);
+    // Runs for every flock boid, so it is written as plain loops that stop at the first flockmate
+    // found (checking the boid's own cell first, where one usually is)
+    const hasFlockmateNear = (i, pack) => {
+        const xi = data[i * STRIDE], yi = data[i * STRIDE + 1];
+        const cx = cellXOf[i], cy = cellYOf[i];
+        for (let ring = 0; ring <= 1; ring++) {
+            for (let y = Math.max(0, cy - 1); y <= Math.min(HASH_DIM - 1, cy + 1); y++) {
+                for (let x = Math.max(0, cx - 1); x <= Math.min(HASH_DIM - 1, cx + 1); x++) {
+                    if ((ring === 0) !== (x === cx && y === cy)) continue;
+                    for (let j = hashHead[y * HASH_DIM + x]; j !== -1; j = hashNext[j]) {
+                        if (j === i || packOf[j] !== pack) continue;
+                        const dx = xi - data[j * STRIDE], dy = yi - data[j * STRIDE + 1];
+                        if (dx * dx + dy * dy < iso2) return 1;
+                    }
                 }
             }
         }
-    };
-    const dist2 = (i, j) => {
-        const dx = data[i * STRIDE] - data[j * STRIDE], dy = data[i * STRIDE + 1] - data[j * STRIDE + 1];
-        return dx * dx + dy * dy;
+        return 0;
     };
     for (const [pack, list] of members) {
-        for (const i of list) {
-            ownNear[i] = 0;
-            forNeighbors(i, j => { if (packOf[j] === pack && !ownNear[i] && dist2(i, j) < iso2) ownNear[i] = 1; });
-        }
+        for (const i of list) ownNear[i] = hasFlockmateNear(i, pack);
     }
+
+    // First boid of another flock (in formation, not just converted) within capture range of i
+    const findStealer = (i, pack) => {
+        const xi = data[i * STRIDE], yi = data[i * STRIDE + 1];
+        const cx = cellXOf[i], cy = cellYOf[i];
+        for (let y = Math.max(0, cy - 1); y <= Math.min(HASH_DIM - 1, cy + 1); y++) {
+            for (let x = Math.max(0, cx - 1); x <= Math.min(HASH_DIM - 1, cx + 1); x++) {
+                for (let j = hashHead[y * HASH_DIM + x]; j !== -1; j = hashNext[j]) {
+                    const pj = packOf[j];
+                    if (j === i || converted[j] || pj === pack || pj === FOOD || pj === DEAD || !ownNear[j]) continue;
+                    const dx = xi - data[j * STRIDE], dy = yi - data[j * STRIDE + 1];
+                    if (dx * dx + dy * dy < cap2) return pj;
+                }
+            }
+        }
+        return -1;
+    };
 
     // --- Stragglers: a lone boid touched by a boid of another flock that is in formation gets
     // stolen, whatever the sizes. (Eating food and smaller flocks happens on the GPU every step.)
@@ -734,12 +757,7 @@ function applyRules(data, t, simNow) {
         if (t < TRUCE_SECONDS) break;
         for (const i of list) {
             if (converted[i] || ownNear[i] || data[i * STRIDE + 5] > simNow - STEAL_IMMUNITY) continue;
-            let stealer = -1;
-            forNeighbors(i, j => {
-                const pj = packOf[j];
-                if (stealer !== -1 || converted[j] || pj === pack || pj === FOOD || pj === DEAD || !ownNear[j]) return;
-                if (dist2(i, j) < cap2) stealer = pj;
-            });
+            const stealer = findStealer(i, pack);
             if (stealer !== -1) convert(i, stealer);
         }
     }
@@ -751,12 +769,20 @@ function applyRules(data, t, simNow) {
         const shed = Math.floor(flock.shedAccumulator);
         if (shed <= 0) continue;
         flock.shedAccumulator -= shed;
-        const list = members.get(flock.packId)
-            .filter(i => !converted[i])
-            .map(i => [i, (data[i * STRIDE] - flock.x) ** 2 + (data[i * STRIDE + 1] - flock.y) ** 2])
-            .sort((a, b) => b[1] - a[1]);
+        // Pick the `shed` outermost boids (a few per pass, so repeated scans beat sorting the flock)
+        const list = members.get(flock.packId).filter(i => !converted[i]);
+        const outermost = [];
         for (let k = 0; k < Math.min(shed, list.length - 1); k++) {
-            const i = list[k][0];
+            let best = -1, bestD2 = -1;
+            for (const i of list) {
+                if (converted[i]) continue;
+                const d2 = (data[i * STRIDE] - flock.x) ** 2 + (data[i * STRIDE + 1] - flock.y) ** 2;
+                if (d2 > bestD2) { bestD2 = d2; best = i; }
+            }
+            converted[best] = 1;
+            outermost.push(best);
+        }
+        for (const i of outermost) {
             const b = i * STRIDE;
             converted[i] = 1;
             flock.count--;

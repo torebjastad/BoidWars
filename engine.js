@@ -1,5 +1,5 @@
 
-import { getComputeWGSL, getRenderWGSL, getArenaBorderWGSL, getArenaGridWGSL } from './shaders.js';
+import { getComputeWGSL, getRenderWGSL, getArenaBorderWGSL, getArenaGridWGSL, getPatchWGSL } from './shaders.js';
 
 // Struct Layout:
 // ...
@@ -244,6 +244,16 @@ export class BoidsEngine {
         };
         this.computePipeline = makeCompute("mainCompute");
 
+        // Game: batched boid edits from the CPU (see patchBoid)
+        if (this.isGame) {
+            this.patchPipeline = device.createComputePipeline({
+                layout: 'auto',
+                compute: { module: device.createShaderModule({ code: getPatchWGSL() }), entryPoint: 'applyPatches' },
+            });
+            this.patchCountBuffer = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+            this.pendingPatches = new Map();
+        }
+
         this.renderPipeline = device.createRenderPipeline({
             layout: pipelineLayout,
             vertex: {
@@ -359,6 +369,7 @@ export class BoidsEngine {
     }
 
     initTriangleBuffers(count, initialDataArray = null) {
+        this.pendingPatches?.clear();   // Edits meant for the old buffers
         if (this.triangleBufferA) this.triangleBufferA.destroy();
         if (this.triangleBufferB) this.triangleBufferB.destroy();
 
@@ -624,12 +635,69 @@ export class BoidsEngine {
 
     // Overwrite floats [floatOffset, floatOffset + values.length) of one boid in both ping-pong
     // buffers, leaving every other boid's in-flight state alone
+    // Game: edits are queued and merged per boid (later edits win), then applied on the GPU in one
+    // pass before the next simulation step. Writing each edit with its own writeBuffer stalled the
+    // frame when hundreds of food were respawned at once.
     patchBoid(index, floatOffset, values) {
+        if (this.isGame) {
+            let p = this.pendingPatches.get(index);
+            if (!p) {
+                p = { mask: 0, values: new Float32Array(8) };
+                this.pendingPatches.set(index, p);
+            }
+            for (let k = 0; k < values.length; k++) {
+                p.values[floatOffset + k] = values[k];
+                p.mask |= 1 << (floatOffset + k);
+            }
+            return;
+        }
         const stride = this.isGame ? 32 : 16;
         const byteOffset = index * stride + floatOffset * 4;
         const data = values instanceof Float32Array ? values : new Float32Array(values);
         this.device.queue.writeBuffer(this.triangleBufferA, byteOffset, data);
         this.device.queue.writeBuffer(this.triangleBufferB, byteOffset, data);
+    }
+
+    // Upload the queued boid edits and apply them to both buffers (encoded before the next step)
+    flushPatches(commandEncoder) {
+        const n = this.pendingPatches?.size;
+        if (!n) return;
+        const bytes = n * 48;
+        if (!this.patchBuffer || this.patchBuffer.size < bytes) {
+            this.patchBuffer?.destroy();
+            this.patchBuffer = this.device.createBuffer({
+                size: Math.max(48 * 256, 2 ** Math.ceil(Math.log2(bytes))),
+                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+            });
+            this.patchStaging = new ArrayBuffer(this.patchBuffer.size);
+        }
+        const u32 = new Uint32Array(this.patchStaging);
+        const f32 = new Float32Array(this.patchStaging);
+        let o = 0;
+        for (const [index, p] of this.pendingPatches) {
+            u32[o] = index;
+            u32[o + 1] = p.mask;
+            f32.set(p.values, o + 4);
+            o += 12;
+        }
+        this.pendingPatches.clear();
+        this.device.queue.writeBuffer(this.patchBuffer, 0, this.patchStaging, 0, bytes);
+        this.device.queue.writeBuffer(this.patchCountBuffer, 0, new Uint32Array([n, 0, 0, 0]));
+
+        const bindGroup = this.device.createBindGroup({
+            layout: this.patchPipeline.getBindGroupLayout(0),
+            entries: [
+                { binding: 0, resource: { buffer: this.triangleBufferA } },
+                { binding: 1, resource: { buffer: this.triangleBufferB } },
+                { binding: 2, resource: { buffer: this.patchBuffer } },
+                { binding: 3, resource: { buffer: this.patchCountBuffer } },
+            ],
+        });
+        const pass = commandEncoder.beginComputePass();
+        pass.setPipeline(this.patchPipeline);
+        pass.setBindGroup(0, bindGroup);
+        pass.dispatchWorkgroups(Math.ceil(n / 64));
+        pass.end();
     }
 
     // Game mode: per-pack steering, MAX_PACKS x PACK_CONTROL_FLOATS floats
@@ -687,6 +755,7 @@ export class BoidsEngine {
         this.updateParamsBuffer();
 
         const commandEncoder = this.device.createCommandEncoder();
+        this.flushPatches(commandEncoder);
 
         // Even steps read A and write B, odd steps read B and write A
         for (let i = 0; i < steps; i++) {
@@ -779,20 +848,27 @@ export class BoidsEngine {
         const stride = this.isGame ? 32 : 16;
         const size = this.params.triangleCount * stride;
 
-        const gpuReadBuffer = this.device.createBuffer({
-            size: size,
-            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
-        });
+        // The staging buffer and the result array are reused between reads (the caller must not
+        // keep the array past its next readData call, and only one read may be in flight)
+        if (!this.readBuffer || this.readBuffer.size !== size) {
+            this.readBuffer?.destroy();
+            this.readBuffer = this.device.createBuffer({
+                size: size,
+                usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+            });
+            this.readResult = new Float32Array(size / 4);
+        }
+        const gpuReadBuffer = this.readBuffer;
 
         const commandEncoder = this.device.createCommandEncoder();
+        this.flushPatches(commandEncoder);
         commandEncoder.copyBufferToBuffer(latestBuffer, 0, gpuReadBuffer, 0, size);
         this.device.queue.submit([commandEncoder.finish()]);
 
         await gpuReadBuffer.mapAsync(GPUMapMode.READ);
-        const arrayBuffer = gpuReadBuffer.getMappedRange();
-        const result = new Float32Array(arrayBuffer.slice(0));
+        const result = this.readResult;
+        result.set(new Float32Array(gpuReadBuffer.getMappedRange()));
         gpuReadBuffer.unmap();
-        gpuReadBuffer.destroy();
 
         return result;
     }

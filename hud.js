@@ -47,6 +47,7 @@ export class Hud {
         const ctx = this.ctx;
         ctx.clearRect(0, 0, this.w, this.h);
         this.state = state;
+        this.updateShownSize();
 
         this.arrows = [];
         for (const b of state.blooms) this.drawBloom(b);
@@ -57,6 +58,7 @@ export class Hud {
         this.drawSizePanel();
         this.drawAbilities();
         this.drawTimer();
+        this.drawTopSize();
         this.drawEvents();
     }
 
@@ -148,7 +150,9 @@ export class Hud {
         const x = cx + dx * scale;
         let y = cy + dy * scale;
         if (x < MINIMAP_SIZE + 40 && y > this.h - MINIMAP_SIZE - 40) y = this.h - MINIMAP_SIZE - 40;
-        // Stay above the size panel and ability bars
+        // Stay clear of the size readout and timer at the top...
+        if (Math.abs(x - cx) < 150 && y < 105) y = 105;
+        // ...and above the size panel and ability bars
         if (Math.abs(x - cx) < 170 && y > this.h - 132) y = this.h - 132;
         return { x, y };
     }
@@ -251,6 +255,29 @@ export class Hud {
         ctx.restore();
     }
 
+    // The player's size as shown: rolls smoothly toward the real count instead of jumping with
+    // every snapshot, and the 5 s trend only refreshes once a second
+    updateShownSize() {
+        const size = this.state.size;
+        const now = performance.now() / 1000;
+        const dt = Math.min(0.1, now - (this.shownAt ?? now));
+        this.shownAt = now;
+        if (!size) { this.shown = undefined; return; }
+        if (this.shown === undefined || Math.abs(size.count - this.shown) > 0.5 * Math.max(size.count, 20)) {
+            this.shown = size.count;
+        } else {
+            this.shown += (size.count - this.shown) * Math.min(1, dt * 4);
+        }
+        if (this.trendAt === undefined || now - this.trendAt >= 1) {
+            this.shownTrend = size.trend;
+            this.trendAt = now;
+        }
+    }
+
+    shownCount() {
+        return Math.round(this.shown ?? 0).toLocaleString('en-US');
+    }
+
     // Flash green or red for a moment when the player's size jumps (a kill, a bite taken out of
     // us), not for the steady trickle of food and upkeep
     sizeFlash(count) {
@@ -281,13 +308,30 @@ export class Hud {
         ctx.textAlign = 'center';
         ctx.lineWidth = 3;
         ctx.strokeStyle = 'rgba(0,0,0,0.7)';
-        ctx.strokeText(`${size.count}`, p.x, p.y - r - 12);
+        ctx.strokeText(this.shownCount(), p.x, p.y - r - 12);
         ctx.fillStyle = '#33ccff';
-        ctx.fillText(`${size.count}`, p.x, p.y - r - 12);
+        ctx.fillText(this.shownCount(), p.x, p.y - r - 12);
         ctx.restore();
     }
 
-    // Big readout of the player's own size, just above the ability bars
+    // The player's size in large type at the top of the screen
+    drawTopSize() {
+        const size = this.state.size;
+        if (!size) return;
+        const ctx = this.ctx;
+        const flash = this.sizeFlash(size.count);
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.font = 'bold 42px sans-serif';
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+        ctx.strokeText(this.shownCount(), this.w / 2, 68);
+        ctx.fillStyle = flash || '#33ccff';
+        ctx.fillText(this.shownCount(), this.w / 2, 68);
+        ctx.restore();
+    }
+
+    // Rank, growth trend and size thresholds, just above the ability bars
     drawSizePanel() {
         const size = this.state.size;
         if (!size) return;
@@ -295,40 +339,34 @@ export class Hud {
         const w = 292, h = 54;
         const x = this.w / 2 - w / 2;
         const y = this.h - 34 - 18 - 10 - h;
-        const flash = this.sizeFlash(size.count);
 
         ctx.save();
         ctx.fillStyle = 'rgba(0,0,0,0.55)';
         ctx.fillRect(x, y, w, h);
-        ctx.strokeStyle = flash || 'rgba(51,204,255,0.6)';
-        ctx.lineWidth = flash ? 2 : 1;
+        ctx.strokeStyle = 'rgba(51,204,255,0.6)';
         ctx.strokeRect(x, y, w, h);
 
-        // Size
+        // Rank and growth over the last few seconds
         ctx.textAlign = 'left';
-        ctx.font = 'bold 30px sans-serif';
-        ctx.fillStyle = flash || '#33ccff';
-        ctx.fillText(`${size.count}`, x + 12, y + 36);
-        const numW = ctx.measureText(`${size.count}`).width;
-        ctx.font = '10px sans-serif';
-        ctx.fillStyle = 'rgba(255,255,255,0.6)';
-        ctx.fillText('YOUR FLOCK', x + 12, y + 48);
-        if (size.trend !== 0) {
-            ctx.font = 'bold 12px sans-serif';
-            ctx.fillStyle = size.trend > 0 ? COLORS.prey : COLORS.threat;
-            ctx.fillText(`${size.trend > 0 ? '▲ +' : '▼ '}${size.trend}`, x + 18 + numW, y + 22);
-        }
-
-        // Rank and who you can eat / who can eat you
-        ctx.textAlign = 'right';
-        ctx.font = 'bold 13px sans-serif';
+        ctx.font = 'bold 22px sans-serif';
         ctx.fillStyle = size.rank === 1 ? '#ffd24d' : '#ffffff';
-        ctx.fillText(`#${size.rank} of ${size.of}`, x + w - 12, y + 17);
+        ctx.fillText(`#${size.rank}`, x + 12, y + 30);
+        const rankW = ctx.measureText(`#${size.rank}`).width;
+        ctx.font = '12px sans-serif';
+        ctx.fillStyle = 'rgba(255,255,255,0.6)';
+        ctx.fillText(`of ${size.of}`, x + 16 + rankW, y + 30);
+        const trend = this.shownTrend ?? 0;
+        ctx.font = 'bold 12px sans-serif';
+        ctx.fillStyle = trend > 0 ? COLORS.prey : trend < 0 ? COLORS.threat : 'rgba(255,255,255,0.5)';
+        ctx.fillText(trend === 0 ? '— steady' : `${trend > 0 ? '▲ +' : '▼ '}${trend} in 5s`, x + 12, y + 47);
+
+        // Who you can eat / who can eat you
+        ctx.textAlign = 'right';
         ctx.font = '12px sans-serif';
         ctx.fillStyle = COLORS.prey;
-        ctx.fillText(size.eatMax > 0 ? `You eat flocks ≤ ${size.eatMax}` : 'Too small to eat anyone', x + w - 12, y + 33);
+        ctx.fillText(size.eatMax > 0 ? `You eat flocks ≤ ${size.eatMax}` : 'Too small to eat anyone', x + w - 12, y + 24);
         ctx.fillStyle = COLORS.threat;
-        ctx.fillText(`Flocks ≥ ${size.dangerMin} eat you`, x + w - 12, y + 48);
+        ctx.fillText(`Flocks ≥ ${size.dangerMin} eat you`, x + w - 12, y + 42);
         ctx.restore();
     }
 
@@ -369,22 +407,23 @@ export class Hud {
         const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
         ctx.save();
         ctx.textAlign = 'center';
-        ctx.font = 'bold 18px sans-serif';
-        ctx.fillStyle = '#ffffff';
-        ctx.fillText(fmt(t), this.w / 2, 30);
+        ctx.font = 'bold 15px sans-serif';
+        ctx.fillStyle = 'rgba(255,255,255,0.85)';
+        ctx.fillText(fmt(t), this.w / 2, 20);
         ctx.font = '13px sans-serif';
+        const msgY = this.state.size ? 90 : 42;
         if (this.state.truceLeft > 0) {
             ctx.fillStyle = '#9fe8ff';
-            ctx.fillText(`Truce: flocks can't eat each other for ${Math.ceil(this.state.truceLeft)}s`, this.w / 2, 50);
+            ctx.fillText(`Truce: flocks can't eat each other for ${Math.ceil(this.state.truceLeft)}s`, this.w / 2, msgY);
         } else if (zone.final) {
             ctx.fillStyle = zone.endsIn < 10 ? '#ff6a6a' : '#ffb347';
-            ctx.fillText(`Final showdown: largest flock wins in ${fmt(zone.endsIn)}`, this.w / 2, 50);
+            ctx.fillText(`Final showdown: largest flock wins in ${fmt(zone.endsIn)}`, this.w / 2, msgY);
         } else if (zone.shrinking) {
             ctx.fillStyle = `rgba(255, 90, 90, ${0.7 + 0.3 * Math.sin(performance.now() / 150)})`;
-            ctx.fillText('Arena shrinking!', this.w / 2, 50);
+            ctx.fillText('Arena shrinking!', this.w / 2, msgY);
         } else if (Number.isFinite(zone.changeIn)) {
             ctx.fillStyle = zone.changeIn < 15 ? '#ff9a6a' : 'rgba(255,255,255,0.6)';
-            ctx.fillText(`Arena shrinks in ${fmt(zone.changeIn)}`, this.w / 2, 50);
+            ctx.fillText(`Arena shrinks in ${fmt(zone.changeIn)}`, this.w / 2, msgY);
         }
         ctx.restore();
     }
