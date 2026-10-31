@@ -10,43 +10,43 @@ import { Hud } from './hud.js';
 // ============================================================================
 
 // Flocks
-const STARTING_BOIDS = 5;           // Every flock (player and enemies) starts this size
+const STARTING_BOIDS = 12;          // Every flock (player and enemies) starts this size
 const ENEMY_FLOCK_COUNT = 15;       // Number of enemy flocks
-const CAPACITY = 6000;              // Boid slots on the GPU, shared by flocks and food
+const CAPACITY = 24000;             // Boid slots on the GPU, shared by flocks and food
 
 // Arena: half-size (the arena spans -size..+size). It shrinks in stages to force a showdown.
 const ARENA_START = 14;
 const ZONE_SCHEDULE = [             // [seconds before shrinking, seconds to shrink, new size]
-    [50, 30, 9],
-    [30, 30, 6],
-    [25, 25, 3.5],
+    [50, 30, 10],
+    [30, 30, 7],
+    [25, 25, 5],
 ];
 const FINAL_SECONDS = 45;           // After the last shrink: the largest flock wins when this runs out
 const MIN_SPAWN_DISTANCE = 6;       // Between flock spawn points
 
 // Food economy
-const FOOD_DENSITY = 0.6;           // Target food per unit² of the current arena
-const FOOD_RESPAWN_RATE = 14;       // Food per second added while below the target
-const FOOD_VALUE = 0.55;            // Chance an eaten food becomes a boid (plenty of food, each worth less)
-const FOOD_RADIUS = 0.3;            // Food drifts toward flock boids within this distance
+const FOOD_DENSITY = 2.0;           // Target food per unit² of the current arena
+const FOOD_RESPAWN_RATE = 60;       // Food per second added while below the target
+const FOOD_VALUE = 0.75;            // Chance an eaten food becomes a boid
+const FOOD_RADIUS = 0.25;           // Food drifts toward flock boids within this distance
 const BLOOM_FIRST = 20;             // Seconds until the first food bloom
 const BLOOM_INTERVAL = [15, 25];    // Seconds between blooms (random in range)
-const BLOOM_FOOD = 90;              // Food per bloom
-const BLOOM_RADIUS = 1.6;
+const BLOOM_FOOD = 300;             // Food per bloom
+const BLOOM_RADIUS = 2.2;
 
 // Eating
 const TRUCE_SECONDS = 15;           // No flock eats or steals from another until this many seconds in
-const CAPTURE_RADIUS = 0.14;        // Boids this close interact
+const CAPTURE_RADIUS = 0.11;        // Boids this close interact
 const CONSUME_RATIO = 1.2;          // A flock needs this many times the boids of another to eat it...
 const CONSUME_MARGIN = 4;           // ...and at least this many more boids (keeps early fights from being a coin flip)
-const ISOLATION_RADIUS = 0.3;       // A boid with no flockmate this close is a straggler: anyone can steal it
+const ISOLATION_RADIUS = 0.25;      // A boid with no flockmate this close is a straggler: anyone can steal it
 const STEAL_IMMUNITY = 1.0;         // Seconds a newly captured boid can't be stolen back
 const DIGEST_TIME = 1.0;            // Seconds before a newly captured boid can capture others
 const SPILL = 0.35;                 // Share of eaten boids that burst out as food instead of joining
 
 // Upkeep: flocks above DECAY_FREE boids shed DECAY_RATE * (size - DECAY_FREE) boids per second.
 // Shed boids are thrown outward; SHED_FOOD_SHARE of them become food, the rest are gone.
-const DECAY_FREE = 40;
+const DECAY_FREE = 150;
 const DECAY_RATE = 0.01;
 const SHED_FOOD_SHARE = 0.5;
 const SHED_SPEED = 0.05;
@@ -54,7 +54,7 @@ const SHED_GRACE = 3;               // Seconds before a flock can pick its own s
 
 // Movement: big flocks are slower (per-step speeds, the simulation runs at 60 steps/s)
 const BASE_SPEED = 0.065;           // Max speed of a SPEED_REF-sized flock
-const SPEED_REF = 10;
+const SPEED_REF = 30;
 const SPEED_EXPONENT = 0.15;        // speed ~ size^-exponent
 const SPEED_MIN_MUL = 0.65;
 const SPEED_MAX_MUL = 1.15;
@@ -71,7 +71,7 @@ const RELEASE_BURST = { speedMul: 1.35, duration: 0.35, minHold: 0.25 };
 // snaps back together for `contract` seconds.
 const PULSE = {
     expand: 0.3, contract: 0.6, spread: 0.03, steerDuringExpand: 0.5, contractCohesion: 4,
-    radiusBase: 0.6, radiusPerSqrt: 0.15, radiusMax: 1.8, zoneShare: 0.25,
+    radiusBase: 0.6, radiusPerSqrt: 0.1, radiusMax: 2.4, zoneShare: 0.3,
     aiInterval: 2.5,                // Enemy flocks pulse at most this often
 };
 
@@ -93,20 +93,20 @@ const MOUSE_MODE = 'hold';
 
 // Camera
 const BASE_ZOOM = 0.5;
-const MIN_ZOOM = 0.15;
+const MIN_ZOOM = 0.12;
 const ZOOM_EXPONENT = 0.15;
 const CAMERA_SMOOTHING = 0.1;
 
 // Boid physics (tuned in the simulator; distances scale with triangleSize)
 const PACK_COUNT = ENEMY_FLOCK_COUNT + 3;   // Player (0) + food (1) + enemies + a bucket for unused slots
 const GAME_PARAMS = {
-    separationDistance: 0.11,
+    separationDistance: 0.085,
     separationStrength: 0.051,
-    alignmentDistance: 0.15,
+    alignmentDistance: 0.12,
     alignmentStrength: 0.1,
     cohesionDistance: 15.0,
     cohesionStrength: 0.002,
-    triangleSize: 0.1,
+    triangleSize: 0.08,
     triangleCount: CAPACITY,
     colorFadeDuration: 0.5,
     arenaSize: ARENA_START,

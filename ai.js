@@ -116,7 +116,7 @@ export class FlockBrain {
             this.preyId = -1;
             this.setTarget(world, food.x + this.foodJitter.x, food.y + this.foodJitter.y);
             const quiet = threats.every(th => th.gap > 4);
-            this.wantPulse = d.pulse && quiet && food.local >= 5;
+            this.wantPulse = d.pulse && quiet && food.local >= 15;
         } else {
             this.wander(me, world);
         }

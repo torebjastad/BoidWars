@@ -24,17 +24,17 @@ This document explains how the game is balanced, why, and which knobs to turn. A
 
 ### Arena: big start, shrinking end
 - **Size:** the arena starts at 28×28 (`ARENA_START = 14`, half-size). That's about twice the old area: room to manoeuvre, but encounters come quickly.
-- **Shrinking:** `ZONE_SCHEDULE` shrinks it in three stages: to 18×18 at 0:50–1:20, to 12×12 by 2:20, and to 7×7 by 3:10. The HUD counts down to each shrink, and the minimap shows the next border.
+- **Shrinking:** `ZONE_SCHEDULE` shrinks it in three stages: to 20×20 at 0:50–1:20, to 14×14 by 2:20, and to 10×10 by 3:10 (big enough for a flock of thousands). The HUD counts down to each shrink, and the minimap shows the next border.
 - **Final showdown:** after the last shrink, a 45-second countdown (`FINAL_SECONDS`) runs, and when it ends **the largest flock wins**. So games end by about 4 minutes even when a small flock keeps escaping.
 
 ### Opening truce
 For the first 15 s (`TRUCE_SECONDS`), flocks can't eat or steal from each other. Everyone gets a fair start to grow, and nobody is eaten by a neighbour in the first seconds. The AI starts watching for threats 4 s before the truce ends.
 
 ### Food economy
-- **Plentiful food.** There are 0.6 food per unit² (`FOOD_DENSITY`), and each food has a 55% chance to become a boid (`FOOD_VALUE`). The screen always has things to collect.
-- **Steady respawn.** Food respawns at 14/s (`FOOD_RESPAWN_RATE`) toward a target that scales with the current arena area. As the arena shrinks, there's less food in total.
-- **Weaker pull.** Food drifts toward flock boids within 0.3 units (`FOOD_RADIUS`, was 0.8), so you have to actually sweep through it. That is what the **release burst** and **Pulse** are for.
-- **Blooms:** from 0:20, every 15–25 s a patch of 90 food appears (`BLOOM_*`). Blooms are announced, and AI flocks head for them too, so they become contested hot spots that start fights.
+- **Plentiful food.** There are 2 food per unit² (`FOOD_DENSITY`), and each food has a 75% chance to become a boid (`FOOD_VALUE`). Flocks start at 12 boids and grow into the hundreds within a minute, and the leaders reach 1,000–3,000 boids by the showdown.
+- **Steady respawn.** Food respawns at 60/s (`FOOD_RESPAWN_RATE`) toward a target that scales with the current arena area. As the arena shrinks, there's less food in total.
+- **Weaker pull.** Food drifts toward flock boids within 0.25 units (`FOOD_RADIUS`, was 0.8), so you have to actually sweep through it. That is what the **release burst** and **Pulse** are for.
+- **Blooms:** from 0:20, every 15–25 s a patch of 300 food appears (`BLOOM_*`). Blooms are announced, and AI flocks head for them too, so they become contested hot spots that start fights.
 
 ### Eating
 - **Who can eat whom:** a flock can eat another if it is at least **1.2×** its size **and at least 4 boids bigger** (`CONSUME_RATIO`, `CONSUME_MARGIN`). The margin removes coin-flip fights between small flocks.
@@ -44,14 +44,14 @@ For the first 15 s (`TRUCE_SECONDS`), flocks can't eat or steal from each other.
 - **Stragglers:** a boid with no flockmate within 0.3 units can be stolen by any flock whose boid is in formation, regardless of size. Small flocks can pick off a big flock's stragglers, and spreading out with Pulse is risky.
 
 ### The cost of being big
-- **Upkeep:** flocks above 40 boids shed 1% of the excess per second (`DECAY_*`). Shed boids are thrown outward. Half become food, which the shedding flock can't eat for 3 s, and the other half disappear. A giant leaves a trail of food that smaller flocks can follow, and its size stays in check unless it keeps hunting.
-- **Speed:** speed scales with size^-0.15, between 0.65× and 1.15× (`SPEED_*`), from a base of 0.065 per step. A 5-boid flock is about 1.7× as fast as a 500-boid one, so small flocks can escape in open space. Big flocks have to corner them, cut them off, or use Dash.
+- **Upkeep:** flocks above 150 boids shed 1% of the excess per second (`DECAY_*`). Shed boids are thrown outward. Half become food, which the shedding flock can't eat for 3 s, and the other half disappear. A giant leaves a trail of food that smaller flocks can follow, and its size stays in check unless it keeps hunting.
+- **Speed:** speed scales with size^-0.15, between 0.65× and 1.15× (`SPEED_*`), from a base of 0.065 per step. A 12-boid flock is about 1.6× as fast as a 2,000-boid one, so small flocks can escape in open space. Big flocks have to corner them, cut them off, or use Dash.
 
 ### Controls and abilities
 - **Hold the left mouse button:** every boid steers toward the cursor. With the cursor ahead of the flock, that moves it; with the cursor on the flock, it squeezes into a tight ball. With the button released, the boids just flock on their own, as in the original game (`MOUSE_MODE = 'hold'`).
 - **Release:** boids rushing toward the cursor overshoot and shoot outward, sweeping a wide ring before cohesion pulls them back. A release after holding at least 0.25 s also gives 1.35× speed for 0.35 s (`RELEASE_BURST`), so the burst goes further. Timing it well is the main skill.
 - **Dash** (`Shift` or right click, 4 s cooldown): 1.7× speed for 0.6 s, for finishing a chase or escaping one. It stacks with the release burst (about 2.3×) for a big explosion or a long lunge.
-- **Pulse** (hold `Space`, no cooldown): tap for a quick burst, or hold to keep the flock spread over a wide disc. Its radius is 0.6 + 0.15·√size, capped at 1.8 units (`PULSE.radiusMax`) and at a quarter of the arena half-size (`PULSE.zoneShare`): about 1.3 units at 20 boids, and the cap from about 65 boids up. A big flock just gets denser when it pulses, not wider, so it can't blanket the map. Release and the flock snaps back together. It sweeps up much more food, but your stragglers can be stolen while you're spread out, which is the trade-off. Enemy flocks only tap it, at most every 2.5 s (`PULSE.aiInterval`).
+- **Pulse** (hold `Space`, no cooldown): tap for a quick burst, or hold to keep the flock spread over a wide disc. Its radius is 0.6 + 0.1·√size, capped at 2.4 units (`PULSE.radiusMax`) and at 30% of the arena half-size (`PULSE.zoneShare`): about 1.1 units at 25 boids, and the cap from about 320 boids up. A big flock just gets denser when it pulses, not wider, so it can't blanket the map. Release and the flock snaps back together. It sweeps up much more food, but your stragglers can be stolen while you're spread out, which is the trade-off. Enemy flocks only tap it, at most every 2.5 s (`PULSE.aiInterval`).
 - **Enemy flocks** steer toward their AI's target all the time, and use Dash and Pulse too.
 
 ### Optional organic layer (`ORGANIC` in `game.js`, off by default)
@@ -95,6 +95,8 @@ These come from automated games where an AI (Hard brain) played the player's flo
 - **Leader size:** the biggest flock has 50–110 boids at 0:30, 80–180 at 1:00 and 550–650 in the showdown.
 - **The autopilot player:** won 2 of 6, placed #3, #3 and #8 in three others, and was eaten early (0:24) once. A human who masters the hold-and-release burst and Dash should do better.
 
+- **Bigger flocks (latest change):** after the scale-up (more and richer food, denser boids, 24,000 slots), a full autopilot game had a top flock of about 220 at 0:30, 400–700 at 1:00, 1,100–1,300 at 2:00 and 2,900 in the showdown. Early kills come a little later than before (0–3 eliminations by 1:00), because evenly fed flocks stay closer in size for longer.
+
 ## Tuning cheat sheet
 
 | Symptom | Turn |
@@ -102,6 +104,7 @@ These come from automated games where an AI (Hard brain) played the player's flo
 | Too easy overall | Difficulty Hard; raise `playerBias`; lower AI `thinkTime` |
 | Too hard overall | Difficulty Easy; raise `CONSUME_MARGIN`; raise `DIGEST_TIME` (easier to escape) |
 | Early game too slow | Raise `FOOD_VALUE` or `FOOD_DENSITY` |
+| Flocks too small or too big | `FOOD_DENSITY`, `FOOD_RESPAWN_RATE`, `FOOD_VALUE`, `BLOOM_FOOD`, `DECAY_FREE` (raise `CAPACITY` if flocks hit the slot limit) |
 | One flock runs away with it | Raise `DECAY_RATE` or `SPILL`; lower `DECAY_FREE`; raise `SPEED_EXPONENT` |
 | Games too long | Shorten `ZONE_SCHEDULE` holds or `FINAL_SECONDS` |
 | Fights are over too fast | Raise `DIGEST_TIME` |

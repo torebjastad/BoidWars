@@ -251,13 +251,20 @@ export class Hud {
         ctx.restore();
     }
 
-    // Flash green or red for a moment whenever the player's size changes
+    // Flash green or red for a moment when the player's size jumps (a kill, a bite taken out of
+    // us), not for the steady trickle of food and upkeep
     sizeFlash(count) {
         const now = performance.now() / 1000;
-        if (this.lastCount !== undefined && count !== this.lastCount) {
-            this.flash = { color: count > this.lastCount ? COLORS.prey : COLORS.threat, at: now };
+        if (this.lastCount === undefined || now - this.lastCountAt > 0.5) {
+            this.lastCount = count;
+            this.lastCountAt = now;
         }
-        this.lastCount = count;
+        const change = count - this.lastCount;
+        if (Math.abs(change) >= Math.max(4, 0.04 * this.lastCount)) {
+            this.flash = { color: change > 0 ? COLORS.prey : COLORS.threat, at: now };
+            this.lastCount = count;
+            this.lastCountAt = now;
+        }
         if (!this.flash || now - this.flash.at > 0.4) return null;
         return this.flash.color;
     }
