@@ -251,7 +251,7 @@ export class Hud {
         const { abilities, player } = this.state;
         if (!player) return;
         const items = [
-            { key: 'SPACE', name: 'Pulse', ...abilities.pulse },
+            { key: 'HOLD SPACE', name: 'Pulse', ...abilities.pulse },
             { key: 'SHIFT', name: 'Dash', ...abilities.dash },
         ];
         const ctx = this.ctx;

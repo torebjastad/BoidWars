@@ -20,9 +20,10 @@ import { getComputeWGSL, getRenderWGSL, getArenaBorderWGSL, getArenaGridWGSL } f
 // foodValue (92) (f32)
 export const PARAMS_SIZE_BYTES = 96; // Includes camera, aspect ratio, arena size and game params
 
-// Per-pack steering (game mode): PackControl { goal: vec2f, steer, maxSpeed, cohesionScale, spread, eatenBy (u32 bits), pad }
+// Per-pack steering (game mode): PackControl { goal: vec2f, steer, maxSpeed, cohesionScale, spread,
+// eatenBy (u32 bits), wobble, spreadRadius, steerJitter, pad, pad }
 export const MAX_PACKS = 32;
-export const PACK_CONTROL_FLOATS = 8;
+export const PACK_CONTROL_FLOATS = 12;
 
 // Game mode runs the simulation at a fixed rate so speed doesn't depend on the monitor's refresh rate
 export const SIM_STEP_SECONDS = 1 / 60;

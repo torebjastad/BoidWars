@@ -62,8 +62,25 @@ const STEER_FORCE = 0.02;           // How hard a flock turns toward its target
 
 // Abilities
 const DASH = { speedMul: 1.7, duration: 0.6, cooldown: 5 };
-// Pulse: the flock bursts outward (steering eased off) for `expand` seconds, then snaps back together
-const PULSE = { expand: 0.3, contract: 0.6, spread: 0.03, steerDuringExpand: 0.25, contractCohesion: 4, cooldown: 3 };
+// Pulse, no cooldown: tap for a quick burst (at least `expand` seconds), hold to stay spread out.
+// While spread, boids push out to radiusBase + radiusPerSqrt * sqrt(size); on release the flock
+// snaps back together for `contract` seconds.
+const PULSE = {
+    expand: 0.3, contract: 0.6, spread: 0.03, steerDuringExpand: 0.5, contractCohesion: 4,
+    radiusBase: 0.6, radiusPerSqrt: 0.2,
+    aiInterval: 2.5,                // Enemy flocks pulse at most this often
+};
+
+// Organic motion: boids swirl around the target and the flock breathes in and out
+const ORGANIC = {
+    wobbleBase: 0.25,               // Radius of each boid's own circling aim point...
+    wobblePerSqrt: 0.05,            // ...growing with sqrt(flock size)
+    steerJitter: 0.35,              // Steering strength varies +-35% between boids
+    breathPeriod: 2.4,              // Seconds per breath (out and in)
+    breathCohesion: 0.6,            // Cohesion swings +-60% over a breath
+    breathSpread: 0.006,            // Outward push at the peak of a breath...
+    breathRadius: 1.4,              // ...out to this multiple of the flock's resting radius
+};
 
 // Mouse: 'follow' = the flock always chases the cursor; 'hold' = only while the left button is held
 const MOUSE_MODE = 'follow';
@@ -198,7 +215,8 @@ function createFlocks() {
             // Snapshot summary (updated every check)
             x: 0, y: 0, vx: 0, vy: 0, radius: 0.3, speed: speedFor(STARTING_BOIDS) * 60, seenAt: 0,
             // Abilities (game time)
-            dashUntil: -1, dashReady: 0, pulseStart: -10, pulseReady: 0,
+            dashUntil: -1, dashReady: 0, pulseStart: -10, pulseEnd: -10, pulseHeld: false,
+            breathPhase: Math.random() * Math.PI * 2,
             shedAccumulator: 0,
             lastHitBy: -1,
             placement: 0,
@@ -306,21 +324,29 @@ window.addEventListener('mousedown', e => {
         mouseHeld = true;
         if (MOUSE_MODE === 'follow') useAbility(flocks[0], 'dash');
     } else if (e.button === 2) {
-        useAbility(flocks[0], 'pulse');
+        startPulse(flocks[0], true);
     }
 });
-window.addEventListener('mouseup', e => { if (e.button === 0) mouseHeld = false; });
+window.addEventListener('mouseup', e => {
+    if (e.button === 0) mouseHeld = false;
+    if (e.button === 2 && flocks[0]) releasePulse(flocks[0]);
+});
 window.addEventListener('contextmenu', e => e.preventDefault());
+window.addEventListener('blur', () => { if (flocks[0]) releasePulse(flocks[0]); });
 
+const isSpace = e => e.code === 'Space' || e.key === ' ';
 document.addEventListener('keydown', e => {
     if (e.code === 'KeyR' || e.key === 'r' || e.key === 'R') { restartGame(); return; }
     if (!game || game.phase !== 'playing') return;
-    if (e.code === 'Space' || e.key === ' ') {
+    if (isSpace(e)) {
         e.preventDefault();
-        useAbility(flocks[0], 'pulse');
+        if (!e.repeat) startPulse(flocks[0], true);
     } else if (e.key === 'Shift') {
         useAbility(flocks[0], 'dash');
     }
+});
+document.addEventListener('keyup', e => {
+    if (isSpace(e) && flocks[0]) releasePulse(flocks[0]);
 });
 
 function mouseWorld() {
@@ -338,12 +364,26 @@ function useAbility(flock, ability) {
         flock.dashReady = t + DASH.cooldown;
         return true;
     }
-    if (ability === 'pulse' && t >= flock.pulseReady) {
-        flock.pulseStart = t;
-        flock.pulseReady = t + PULSE.cooldown;
+    if (ability === 'pulse') {
+        startPulse(flock, false);
         return true;
     }
     return false;
+}
+
+// held: stay spread until releasePulse; otherwise a single quick burst
+function startPulse(flock, held) {
+    if (!flock.alive) return;
+    const t = gameTime();
+    flock.pulseStart = t;
+    flock.pulseHeld = held;
+    flock.pulseEnd = held ? Infinity : t + PULSE.expand;
+}
+
+function releasePulse(flock) {
+    if (!flock.pulseHeld) return;
+    flock.pulseHeld = false;
+    flock.pulseEnd = Math.max(gameTime(), flock.pulseStart + PULSE.expand);
 }
 
 // ----------------------------------------------------------------------------
@@ -373,7 +413,10 @@ function updateControls(t) {
             if (world) {
                 flock.brain.update(flock, world, t);
                 if (flock.brain.wantDash) { useAbility(flock, 'dash'); flock.brain.wantDash = false; }
-                if (flock.brain.wantPulse) { useAbility(flock, 'pulse'); flock.brain.wantPulse = false; }
+                if (flock.brain.wantPulse) {
+                    if (t - flock.pulseStart > PULSE.aiInterval) useAbility(flock, 'pulse');
+                    flock.brain.wantPulse = false;
+                }
             }
             target = flock.brain.target;
             steer = STEER_FORCE * (flock.isPlayer ? 1 : difficulty.steer);
@@ -382,14 +425,23 @@ function updateControls(t) {
             steer = (MOUSE_MODE === 'follow' || mouseHeld) ? STEER_FORCE : 0;
         }
 
-        let cohesionScale = 1, spread = 0;
-        const sincePulse = t - flock.pulseStart;
-        if (sincePulse < PULSE.expand) {
+        // Breathing: cohesion eases off and a gentle outward push builds on the out-breath
+        const sqrtCount = Math.sqrt(flock.count);
+        const restRadius = 0.15 + 0.07 * sqrtCount;
+        const breath = Math.sin((2 * Math.PI * t) / ORGANIC.breathPeriod + flock.breathPhase);
+        let cohesionScale = 1 - ORGANIC.breathCohesion * breath;
+        let spread = Math.max(0, breath) * ORGANIC.breathSpread;
+        let spreadRadius = restRadius * ORGANIC.breathRadius;
+
+        // Pulse overrides breathing
+        if (t >= flock.pulseStart && t < flock.pulseEnd) {
             cohesionScale = 0;
             spread = PULSE.spread;
+            spreadRadius = PULSE.radiusBase + PULSE.radiusPerSqrt * sqrtCount;
             steer *= PULSE.steerDuringExpand;
-        } else if (sincePulse < PULSE.expand + PULSE.contract) {
+        } else if (t >= flock.pulseEnd && t < flock.pulseEnd + PULSE.contract) {
             cohesionScale = PULSE.contractCohesion;
+            spread = 0;
         }
 
         const maxSpeed = speedFor(flock.count) * (t < flock.dashUntil ? DASH.speedMul : 1);
@@ -407,6 +459,9 @@ function updateControls(t) {
             if (other.alive && other !== flock && canEat(other.count, flock.count)) eatenBy |= 1 << other.packId;
         }
         packControlBits[o + 6] = eatenBy;
+        packControls[o + 7] = ORGANIC.wobbleBase + ORGANIC.wobblePerSqrt * sqrtCount;
+        packControls[o + 8] = spreadRadius;
+        packControls[o + 9] = ORGANIC.steerJitter;
     }
     engine.setPackControls(packControls);
 }
@@ -452,7 +507,7 @@ function drawHud(t) {
         truceLeft: Math.max(0, TRUCE_SECONDS - t),
         blooms: game.blooms,
         abilities: {
-            pulse: { ready: player.pulseReady - t <= 0, frac: 1 - Math.max(0, player.pulseReady - t) / PULSE.cooldown },
+            pulse: { ready: true, frac: 1, active: t >= player.pulseStart && t < player.pulseEnd },
             dash: { ready: player.dashReady - t <= 0, frac: 1 - Math.max(0, player.dashReady - t) / DASH.cooldown, active: t < player.dashUntil },
         },
     });

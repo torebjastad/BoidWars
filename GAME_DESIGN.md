@@ -48,8 +48,15 @@ For the first 20 s (`TRUCE_SECONDS`), flocks can't eat or steal from each other.
 - **Speed:** speed scales with size^-0.2, between 0.55× and 1.15× (`SPEED_*`). A 5-boid flock is about 2× as fast as a 500-boid one, so small flocks can always escape in open space. Big flocks have to corner them, cut them off, or use Dash.
 
 ### Abilities (same rules for the player and the AI)
-- **Pulse** (`Space` or right click, 3 s cooldown): the flock bursts outward to about 3× its radius and snaps back together. It sweeps up much more food, but your stragglers can be stolen while you're spread out.
+- **Pulse** (`Space` or right click, no cooldown): tap for a quick burst, or hold to keep the flock spread over a wide disc. Its radius is 0.6 + 0.2·√size: about 1.5 units at 20 boids and 3.4 at 200. Release and the flock snaps back together. It sweeps up much more food, but your stragglers can be stolen while you're spread out, which is the trade-off. Enemy flocks only tap it, at most every 2.5 s (`PULSE.aiInterval`).
 - **Dash** (`Shift` or left click, 5 s cooldown): 1.7× speed for 0.6 s, for finishing a chase or escaping one.
+
+### Organic movement (`ORGANIC` in `game.js`)
+The flock should feel alive, not like a rigid formation chasing a point:
+- **Own aim points:** each boid steers toward its own point that circles the target. Points have different radii, speeds and directions, and their distance swings in and out (`wobbleBase`, `wobblePerSqrt`).
+- **Varied steering:** steering strength varies ±35% between boids (`steerJitter`), so some boids lead and some trail.
+- **Breathing:** each flock gently breathes in and out every 2.4 s (`breathPeriod`). Cohesion eases off and a soft outward push builds on the out-breath, then the flock gathers again.
+- **Effect:** at rest, a flock swirls as a loose cloud around the cursor instead of collapsing onto it. On the move, it flows as a ragged wave.
 
 ### Enemy AI (`ai.js`)
 - **Thinking:** each enemy flock thinks every 0.2–0.6 s (depending on difficulty) and picks one of four modes:
@@ -93,7 +100,8 @@ These come from automated games where an AI (Hard brain) played the player's flo
 | One flock runs away with it | Raise `DECAY_RATE` or `SPILL`; lower `DECAY_FREE`; raise `SPEED_EXPONENT` |
 | Games too long | Shorten `ZONE_SCHEDULE` holds or `FINAL_SECONDS` |
 | Fights are over too fast | Raise `DIGEST_TIME` |
-| Pulse too weak or too strong | `PULSE.spread`, `PULSE.expand` |
+| Pulse too weak or too strong | `PULSE.radiusBase`, `PULSE.radiusPerSqrt`, `PULSE.spread` |
+| Flock too tight or too loose | `ORGANIC.wobbleBase`, `ORGANIC.wobblePerSqrt`, `ORGANIC.breathSpread` |
 
 ## Testing aids
 

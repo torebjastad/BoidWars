@@ -23,7 +23,7 @@ Then open <http://localhost:8123> in a WebGPU-capable browser (recent Chrome or 
 **Game** (`game.html`): *Pack Leader*, a flock-eats-flock arena game.
 - Your blue flock follows the cursor. Grow by eating food and devouring smaller flocks while 15 AI flocks, each with its own personality, do the same.
 - A flock can eat another that it outnumbers by 1.2× and at least 3 boids. Rings and edge arrows show what is prey (green) and what is a threat (red).
-- **Pulse** (`Space` or right click) spreads your flock out to sweep up food. **Dash** (`Shift` or left click) gives a burst of speed.
+- **Pulse** (`Space` or right click, no cooldown): tap for a quick burst, or hold to keep your flock spread out to sweep up food. **Dash** (`Shift` or left click) gives a burst of speed.
 - The game opens with a 20 s truce. The arena then shrinks in stages, and you win by being the last flock standing, or the largest when the final 60 s countdown ends.
 - Easy, Normal and Hard difficulties.
 

@@ -53,7 +53,11 @@ struct PackControl {
   cohesionScale: f32,   // Multiplies cohesion (pulse: 0 while expanding, >1 while contracting)
   spread: f32,          // Outward push from the flock center (pulse)
   eatenBy: u32,         // Bit p set: pack p is big enough to eat this pack
-  pad: f32,
+  wobble: f32,          // Each boid aims at its own point circling the goal at this radius
+  spreadRadius: f32,    // Spread only pushes boids out to this distance from the center
+  steerJitter: f32,     // Per-boid variation in steering strength (0..1)
+  pad0: f32,
+  pad1: f32,
 };
 @group(0) @binding(4) var<uniform> packControls: array<PackControl, 32>;
 ` : ''}
@@ -410,13 +414,30 @@ fn mainCompute(@builtin(global_invocation_id) gid: vec3u) {
     var force = (separation * params.separationStrength) +
                 (alignment * params.alignmentStrength) +
                 (cohesion * params.cohesionStrength * ctrl.cohesionScale);
+    let seed = fract(sin(f32(index) * 78.233) * 43758.5453);   // Stable per-boid random number
+
+    // Spread (pulse / breathing): each boid settles at its own distance within spreadRadius
+    // (spread evenly over the disc), pushed out when closer and pulled in when further
     let cohesionLen = length(cohesion);
     if (ctrl.spread > 0.0 && cohesionLen > 1e-4) {
-        force -= (cohesion / cohesionLen) * ctrl.spread;
+        let myRadius = ctrl.spreadRadius * sqrt(0.1 + 0.9 * fract(seed * 11.71));
+        if (cohesionLen < myRadius) {
+            force -= (cohesion / cohesionLen) * ctrl.spread;
+        } else {
+            force += cohesion * params.cohesionStrength * 2.0;
+        }
     }
-    let toTarget = ctrl.goal - instanceInfo.position;
+
+    // Organic motion: every boid has its own slowly circling aim point around the goal
+    // and its own steering strength, so the flock swirls instead of collapsing to a point
+    let orbitDir = select(-1.0, 1.0, fract(seed * 5.71) < 0.5);
+    let angle = seed * 6.2831 + orbitDir * params.time * (0.6 + fract(seed * 3.17) * 0.9);
+    let reach = ctrl.wobble * (0.35 + 0.65 * (0.5 + 0.5 * sin(params.time * (0.5 + seed) + seed * 40.0)));
+    let aim = ctrl.goal + vec2(cos(angle), sin(angle)) * reach;
+    let steerMul = 1.0 + (fract(seed * 17.31) - 0.5) * 2.0 * ctrl.steerJitter;
+    let toTarget = aim - instanceInfo.position;
     if (ctrl.steer > 0.0 && length(toTarget) > 0.05) {
-        force += normalize(toTarget) * ctrl.steer;
+        force += normalize(toTarget) * ctrl.steer * steerMul;
     }
     let maxSpeed = ctrl.maxSpeed;
     ` : `
