@@ -65,13 +65,19 @@ const DASH = { speedMul: 1.7, duration: 0.6, cooldown: 4 };
 // Releasing the mouse after holding it (flock pulled into a ball) shoots the boids outward;
 // this speed boost makes the burst punchier. Combines with Dash.
 const RELEASE_BURST = { speedMul: 1.35, duration: 0.35, minHold: 0.25 };
-// Pulse, no cooldown: tap for a quick burst (at least `expand` seconds), hold to stay spread out.
+// Pulse runs on a charge (0..1): tap for a quick burst (at least `expand` seconds), hold to stay
+// spread out until you let go or the charge runs out. A full charge lasts holdBase seconds of
+// spreading for flocks up to holdRefSize boids, less for bigger ones (size^-holdExponent, at least
+// holdMin), so the biggest flock can't stay spread for long. It refills in rechargeTime seconds
+// while not pulsing, and a pulse needs at least minCharge to start.
 // While spread, boids push out to radiusBase + radiusPerSqrt * sqrt(size), capped at radiusMax and
 // at zoneShare of the arena half-size, so a big flock can't blanket the map. On release the flock
 // snaps back together for `contract` seconds.
 const PULSE = {
     expand: 0.3, contract: 0.6, spread: 0.03, steerDuringExpand: 0.5, contractCohesion: 4,
     radiusBase: 0.6, radiusPerSqrt: 0.1, radiusMax: 2.4, zoneShare: 0.3,
+    holdBase: 2.0, holdRefSize: 100, holdExponent: 0.3, holdMin: 0.8,
+    rechargeTime: 7, minCharge: 0.25,
     aiInterval: 2.5,                // Enemy flocks pulse at most this often
 };
 
@@ -222,6 +228,7 @@ function createFlocks() {
             x: 0, y: 0, vx: 0, vy: 0, radius: 0.3, speed: speedFor(STARTING_BOIDS) * 60, seenAt: 0,
             // Abilities (game time)
             dashUntil: -1, dashReady: 0, burstUntil: -1, pulseStart: -10, pulseEnd: -10, pulseHeld: false,
+            pulseCharge: 1, pulseChargeAt: 0,
             breathPhase: Math.random() * Math.PI * 2,
             shedAccumulator: 0,
             lastHitBy: -1,
@@ -380,20 +387,40 @@ function useAbility(flock, ability) {
         flock.dashReady = t + DASH.cooldown;
         return true;
     }
-    if (ability === 'pulse') {
-        startPulse(flock, false);
-        return true;
-    }
+    if (ability === 'pulse') return startPulse(flock, false);
     return false;
 }
 
-// held: stay spread until releasePulse; otherwise a single quick burst
+// held: stay spread until releasePulse (or out of charge); otherwise a single quick burst
 function startPulse(flock, held) {
-    if (!flock.alive) return;
+    if (!flock.alive || flock.pulseCharge < PULSE.minCharge) return false;
     const t = gameTime();
     flock.pulseStart = t;
     flock.pulseHeld = held;
     flock.pulseEnd = held ? Infinity : t + PULSE.expand;
+    return true;
+}
+
+// Seconds of spreading a full charge gives a flock of this size
+function pulseHoldSeconds(count) {
+    const scale = Math.pow(PULSE.holdRefSize / Math.max(count, PULSE.holdRefSize), PULSE.holdExponent);
+    return Math.max(PULSE.holdMin, PULSE.holdBase * scale);
+}
+
+// Drain the charge while pulsing (ending the pulse when it runs out), refill it otherwise
+function updatePulseCharge(flock, t) {
+    const dt = Math.max(0, t - flock.pulseChargeAt);
+    flock.pulseChargeAt = t;
+    if (t >= flock.pulseStart && t < flock.pulseEnd) {
+        flock.pulseCharge -= dt / pulseHoldSeconds(flock.count);
+        if (flock.pulseCharge <= 0) {
+            flock.pulseCharge = 0;
+            flock.pulseHeld = false;
+            flock.pulseEnd = t;
+        }
+    } else {
+        flock.pulseCharge = Math.min(1, flock.pulseCharge + dt / PULSE.rechargeTime);
+    }
 }
 
 function releasePulse(flock) {
@@ -424,6 +451,7 @@ function updateControls(t) {
 
     for (const flock of flocks) {
         if (!flock.alive) continue;
+        updatePulseCharge(flock, t);
         let target, steer;
         if (flock.brain) {
             if (world) {
@@ -558,7 +586,7 @@ function drawHud(t) {
         truceLeft: Math.max(0, TRUCE_SECONDS - t),
         blooms: game.blooms,
         abilities: {
-            pulse: { ready: true, frac: 1, active: t >= player.pulseStart && t < player.pulseEnd },
+            pulse: { ready: player.pulseCharge >= PULSE.minCharge, frac: player.pulseCharge, active: t >= player.pulseStart && t < player.pulseEnd },
             dash: { ready: player.dashReady - t <= 0, frac: 1 - Math.max(0, player.dashReady - t) / DASH.cooldown, active: t < player.dashUntil },
         },
     });

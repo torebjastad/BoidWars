@@ -51,7 +51,7 @@ For the first 15 s (`TRUCE_SECONDS`), flocks can't eat or steal from each other.
 - **Hold the left mouse button:** every boid steers toward the cursor. With the cursor ahead of the flock, that moves it; with the cursor on the flock, it squeezes into a tight ball. With the button released, the boids just flock on their own, as in the original game (`MOUSE_MODE = 'hold'`).
 - **Release:** boids rushing toward the cursor overshoot and shoot outward, sweeping a wide ring before cohesion pulls them back. A release after holding at least 0.25 s also gives 1.35× speed for 0.35 s (`RELEASE_BURST`), so the burst goes further. Timing it well is the main skill.
 - **Dash** (`Shift` or right click, 4 s cooldown): 1.7× speed for 0.6 s, for finishing a chase or escaping one. It stacks with the release burst (about 2.3×) for a big explosion or a long lunge.
-- **Pulse** (hold `Space`, no cooldown): tap for a quick burst, or hold to keep the flock spread over a wide disc. Its radius is 0.6 + 0.1·√size, capped at 2.4 units (`PULSE.radiusMax`) and at 30% of the arena half-size (`PULSE.zoneShare`): about 1.1 units at 25 boids, and the cap from about 320 boids up. A big flock just gets denser when it pulses, not wider, so it can't blanket the map. Release and the flock snaps back together. It sweeps up much more food, but your stragglers can be stolen while you're spread out, which is the trade-off. Enemy flocks only tap it, at most every 2.5 s (`PULSE.aiInterval`).
+- **Pulse** (hold `Space`, charged): tap for a quick burst, or hold to keep the flock spread over a wide disc until you let go or the charge runs out. A full charge gives 2 s of spreading for flocks up to 100 boids, and less for bigger flocks (size^-0.3, at least 0.8 s: about 1.2 s at 500 boids and 0.8 s at 2,000), so the biggest flock can't stay spread for long. The charge refills in 7 s while not pulsing (`PULSE.rechargeTime`), and a pulse needs at least a quarter charge to start (`PULSE.minCharge`). The HUD bar shows the charge. Its radius is 0.6 + 0.1·√size, capped at 2.4 units (`PULSE.radiusMax`) and at 30% of the arena half-size (`PULSE.zoneShare`). Release and the flock snaps back together. It sweeps up much more food, but your stragglers can be stolen while you're spread out. Enemy flocks follow the same charge rules and only tap it, at most every 2.5 s (`PULSE.aiInterval`). (Squeezing the flock with the mouse and releasing gives a similar burst for free, but takes more skill.)
 - **Enemy flocks** steer toward their AI's target all the time, and use Dash and Pulse too.
 
 ### Optional organic layer (`ORGANIC` in `game.js`, off by default)
@@ -108,7 +108,7 @@ These come from automated games where an AI (Hard brain) played the player's flo
 | One flock runs away with it | Raise `DECAY_RATE` or `SPILL`; lower `DECAY_FREE`; raise `SPEED_EXPONENT` |
 | Games too long | Shorten `ZONE_SCHEDULE` holds or `FINAL_SECONDS` |
 | Fights are over too fast | Raise `DIGEST_TIME` |
-| Pulse too weak or too strong | `PULSE.radiusMax`, `PULSE.zoneShare`, `PULSE.radiusPerSqrt`, `PULSE.spread` |
+| Pulse too weak or too strong | `PULSE.holdBase`, `PULSE.holdExponent`, `PULSE.rechargeTime`, `PULSE.radiusMax`, `PULSE.zoneShare`, `PULSE.radiusPerSqrt`, `PULSE.spread` |
 | Release burst too weak or too strong | `RELEASE_BURST.speedMul`, `RELEASE_BURST.duration` |
 | Want the old follow-the-cursor control | `MOUSE_MODE = 'follow'` (left click then dashes) |
 | Flock too rigid | Raise the `ORGANIC` values |

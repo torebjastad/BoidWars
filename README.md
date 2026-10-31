@@ -24,7 +24,7 @@ Then open <http://localhost:8123> in a WebGPU-capable browser (recent Chrome or 
 - Hold the left mouse button to pull your blue flock toward the cursor. Hold with the cursor on the flock to squeeze it into a ball, then release to make it burst outward and sweep up food.
 - Grow by eating food and devouring smaller flocks while 15 AI flocks, each with its own personality, do the same.
 - A flock can eat another that it outnumbers by 1.2× and at least 4 boids. Rings and edge arrows show what is prey (green) and what is a threat (red).
-- **Dash** (`Shift` or right click) gives a burst of speed and combines with the release burst. **Pulse** (hold `Space`) keeps your flock spread out.
+- **Dash** (`Shift` or right click) gives a burst of speed and combines with the release burst. **Pulse** (hold `Space`) spreads your flock out until its charge runs out.
 - The game opens with a 15 s truce. The arena then shrinks in stages, and you win by being the last flock standing, or the largest when the final 45 s countdown ends.
 - Easy, Normal and Hard difficulties.
 
