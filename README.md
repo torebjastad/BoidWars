@@ -20,11 +20,15 @@ Then open <http://localhost:8123> in a WebGPU-capable browser (recent Chrome or 
 - Tune separation, alignment and cohesion live in the lil-gui panel, or pick a preset (`game`, `mosquitoes`, `blobs`, `particles`, `nanites`).
 - Hold the mouse button to attract the boids, and scroll to zoom.
 
-**Game** (`game.html`): *Pack Leader*, an agar.io-style game.
-- You lead the blue pack by holding the mouse button.
-- Eat glowing food to grow, and swallow any flock smaller than yours. A flock needs to be `CONSUME_RATIO` = 1.2× bigger to eat another.
-- Fifteen AI flocks chase smaller flocks and flee from bigger ones.
-- You win by being the last flock left.
+**Game** (`game.html`): *Pack Leader*, a flock-eats-flock arena game.
+- Hold the left mouse button to pull your blue flock toward the cursor. Hold with the cursor on the flock to squeeze it into a ball, then release to make it burst outward and sweep up food.
+- Grow by eating food and devouring smaller flocks while 15 AI flocks, each with its own personality, do the same.
+- A flock can eat another that it outnumbers by 1.2× and at least 4 boids. Rings and edge arrows show what is prey (green) and what is a threat (red).
+- **Dash** (`Shift` or right click) gives a burst of speed and combines with the release burst. **Pulse** (hold `Space`) spreads your flock out until its charge runs out.
+- The game opens with a 15 s truce. The arena then shrinks in stages, and you win by being the last flock standing, or the largest when the final 45 s countdown ends.
+- Easy, Normal and Hard difficulties.
+
+See [GAME_DESIGN.md](GAME_DESIGN.md) for the rules, the balance reasoning and the tuning knobs.
 
 ## Files
 
@@ -33,11 +37,20 @@ Then open <http://localhost:8123> in a WebGPU-capable browser (recent Chrome or 
 | `engine.js` | `BoidsEngine`: WebGPU setup, buffers, spatial grid, the compute and render passes each frame, and `readData()` for reading boid data back to the CPU |
 | `shaders.js` | All WGSL: the spatial grid passes, the boid compute pass, boid rendering, and the arena border and grid lines |
 | `simulator.js` | Simulator page: GUI, presets, mouse and zoom |
-| `game.js` | Game rules on the CPU: captures, food, AI steering, camera, leaderboard. All tuning constants are at the top |
+| `game.js` | Game rules: food economy, straggler stealing, upkeep, shrinking arena, abilities, input, camera, leaderboard. All tuning constants are at the top |
+| `ai.js` | Enemy flock AI: flee/hunt/forage decisions, personalities and difficulty levels |
+| `hud.js` | 2D overlay: prey and threat rings, off-screen arrows, minimap, ability cooldowns, timer, event feed |
 | `flockNames.js` | Names of the enemy flocks |
 | `boidSimParams.txt` | Notes on earlier parameter presets |
 
-Each boid is a struct in a storage buffer. It holds `position` and `velocity`; in game mode it also has `packId`, `captureTime` and `prevPackId`. Two copies of the buffer swap roles every frame: compute reads one and writes the other, and rendering draws from the result. In game mode, `game.js` reads the buffer back about every 100 ms, applies captures and AI steering, and writes it back when something changed.
+Each boid is a struct in a storage buffer. It holds `position` and `velocity`; in game mode it also has `packId`, `captureTime`, `prevPackId` and `inertUntil`. Two copies of the buffer swap roles every step: compute reads one and writes the other, and rendering draws from the result.
+
+In game mode:
+- The simulation runs at a fixed 60 steps per second, whatever the monitor's refresh rate.
+- The buffer has a fixed 6,000 slots, and unused slots have `packId` -1.
+- Each flock is steered through a small uniform array (target point, speed cap, Pulse state, and which flocks can eat it).
+- Eating food and smaller flocks happens in the compute shader on every step.
+- `game.js` reads the buffer back about 10 times per second for the AI, straggler stealing, upkeep and food respawn. It writes back only the fields of the boids it changes (`patchBoid`), so the rest of the simulation is never rolled back.
 
 ## Neighbor search: the spatial grid
 

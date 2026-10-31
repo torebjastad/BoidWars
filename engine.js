@@ -1,5 +1,5 @@
 
-import { getComputeWGSL, getRenderWGSL, getArenaBorderWGSL, getArenaGridWGSL } from './shaders.js';
+import { getComputeWGSL, getRenderWGSL, getArenaBorderWGSL, getArenaGridWGSL, getPatchWGSL } from './shaders.js';
 
 // Struct Layout:
 // ...
@@ -13,12 +13,25 @@ import { getComputeWGSL, getRenderWGSL, getArenaBorderWGSL, getArenaGridWGSL } f
 // cameraZoom (64) (f32)
 // aspectRatio (68) (f32)
 // arenaSize (72) (f32)
-export const PARAMS_SIZE_BYTES = 80; // Includes camera, aspect ratio, and arena size params
+// foodRadius (76) (f32)
+// captureRadius (80) (f32)
+// digestTime (84) (f32)
+// spill (88) (f32)
+// foodValue (92) (f32)
+export const PARAMS_SIZE_BYTES = 96; // Includes camera, aspect ratio, arena size and game params
+
+// Per-pack steering (game mode): PackControl { goal: vec2f, steer, maxSpeed, cohesionScale, spread,
+// eatenBy (u32 bits), wobble, spreadRadius, steerJitter, pad, pad }
+export const MAX_PACKS = 32;
+export const PACK_CONTROL_FLOATS = 12;
+
+// Game mode runs the simulation at a fixed rate so speed doesn't depend on the monitor's refresh rate
+export const SIM_STEP_SECONDS = 1 / 60;
+const MAX_STEPS_PER_FRAME = 4;
 
 // Spatial grid (neighbor search) tuning
 const SPATIAL_GRID_MAX_DIM = 96;        // Max cells per axis
 const SPATIAL_GRID_MARGIN = 0.25;       // Extra world space around the arena for overshooting boids
-const FOOD_SENSE_RADIUS = 0.8;          // Must match the food sensing radius in shaders.js
 
 export class BoidsEngine {
     constructor(canvas, initialParams, initialColor, isGame = false) {
@@ -31,14 +44,7 @@ export class BoidsEngine {
             ...initialParams
         };
 
-        // Click handling: in game mode, use simple window listeners
-        // In simulator mode, click handling is done in simulator.js with GUI filtering
-        if (isGame) {
-            window.addEventListener('mousedown', () => { this.params.clickState = 1; this.updateParamsBuffer(); });
-            window.addEventListener('mouseup', () => { this.params.clickState = 0; this.updateParamsBuffer(); });
-            window.addEventListener('touchstart', () => { this.params.clickState = 1; this.updateParamsBuffer(); });
-            window.addEventListener('touchend', () => { this.params.clickState = 0; this.updateParamsBuffer(); });
-        }
+        // Mouse handling lives in simulator.js / game.js
 
         this.color = [...initialColor];
         this.isGame = isGame;
@@ -89,6 +95,14 @@ export class BoidsEngine {
         this.frameCount = 0;
         this.startTime = performance.now();
         this.isRunning = false;
+
+        // Simulation clock (game mode: fixed steps of SIM_STEP_SECONDS, scaled by timeScale)
+        this.stepCount = 0;          // Compute steps run; parity picks the ping-pong buffer
+        this.simTime = 0;            // Seconds of simulated time
+        this.timeScale = 1;          // Debug: >1 runs the game faster than real time
+        this.stepAccumulator = 0;
+        this.lastFrameTime = null;
+        this.packControlBuffer = null;
 
         // Resize
         this.onResize = this.onResize.bind(this);
@@ -180,6 +194,11 @@ export class BoidsEngine {
             usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
         });
 
+        this.packControlBuffer = device.createBuffer({
+            size: MAX_PACKS * PACK_CONTROL_FLOATS * 4,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+
         this.updateParamsBuffer();
         this.updateColorBuffer();
         this.updateVertexBuffer();
@@ -190,6 +209,7 @@ export class BoidsEngine {
                 { binding: 1, visibility: GPUShaderStage.COMPUTE | GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } },
                 { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
                 { binding: 3, visibility: GPUShaderStage.VERTEX, buffer: { type: "uniform" } },
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
             ]
         });
 
@@ -223,6 +243,16 @@ export class BoidsEngine {
             coarse: makeCompute("gridCoarse"),
         };
         this.computePipeline = makeCompute("mainCompute");
+
+        // Game: batched boid edits from the CPU (see patchBoid)
+        if (this.isGame) {
+            this.patchPipeline = device.createComputePipeline({
+                layout: 'auto',
+                compute: { module: device.createShaderModule({ code: getPatchWGSL() }), entryPoint: 'applyPatches' },
+            });
+            this.patchCountBuffer = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+            this.pendingPatches = new Map();
+        }
 
         this.renderPipeline = device.createRenderPipeline({
             layout: pipelineLayout,
@@ -339,6 +369,7 @@ export class BoidsEngine {
     }
 
     initTriangleBuffers(count, initialDataArray = null) {
+        this.pendingPatches?.clear();   // Edits meant for the old buffers
         if (this.triangleBufferA) this.triangleBufferA.destroy();
         if (this.triangleBufferB) this.triangleBufferB.destroy();
 
@@ -410,7 +441,7 @@ export class BoidsEngine {
         const cellSize = Math.max(
             p.separationDistance,
             p.alignmentDistance,
-            this.isGame ? FOOD_SENSE_RADIUS : 0,
+            this.isGame ? (p.foodRadius || 0) : 0,
             extent / SPATIAL_GRID_MAX_DIM,
         );
         const dim = Math.ceil(extent / cellSize);
@@ -497,6 +528,7 @@ export class BoidsEngine {
                 { binding: 1, resource: { buffer: this.triangleBufferA } },
                 { binding: 2, resource: { buffer: this.triangleBufferB } },
                 { binding: 3, resource: { buffer: this.colorPaletteBuffer } },
+                { binding: 4, resource: { buffer: this.packControlBuffer } },
             ]
         });
 
@@ -507,6 +539,7 @@ export class BoidsEngine {
                 { binding: 1, resource: { buffer: this.triangleBufferB } },
                 { binding: 2, resource: { buffer: this.triangleBufferA } },
                 { binding: 3, resource: { buffer: this.colorPaletteBuffer } },
+                { binding: 4, resource: { buffer: this.packControlBuffer } },
             ]
         });
 
@@ -541,7 +574,7 @@ export class BoidsEngine {
             view.setFloat32(36, p.mousePos[1], true);
         }
         view.setUint32(40, p.gameMode || 0, true);
-        view.setFloat32(44, (performance.now() - this.startTime) / 1000.0, true); // Time
+        view.setFloat32(44, this.simTime, true); // Time
         view.setUint32(48, p.clickState, true); // Click State
         view.setFloat32(52, p.colorFadeDuration || 5.0, true); // Color Fade Duration
         // Camera params
@@ -554,6 +587,11 @@ export class BoidsEngine {
         view.setFloat32(68, aspectRatio, true);
         // Arena size
         view.setFloat32(72, p.arenaSize || 4.0, true);
+        view.setFloat32(76, p.foodRadius || 0, true);
+        view.setFloat32(80, p.captureRadius || 0, true);
+        view.setFloat32(84, p.digestTime || 0, true);
+        view.setFloat32(88, p.spill || 0, true);
+        view.setFloat32(92, p.foodValue ?? 1, true);
 
         this.device.queue.writeBuffer(this.paramsBuffer, 0, data);
         this.updateSpatialGrid();
@@ -591,6 +629,82 @@ export class BoidsEngine {
         this.updateParamsBuffer();
     }
 
+    latestIsB() {
+        return this.stepCount > 0 && this.stepCount % 2 === 0;
+    }
+
+    // Overwrite floats [floatOffset, floatOffset + values.length) of one boid in both ping-pong
+    // buffers, leaving every other boid's in-flight state alone
+    // Game: edits are queued and merged per boid (later edits win), then applied on the GPU in one
+    // pass before the next simulation step. Writing each edit with its own writeBuffer stalled the
+    // frame when hundreds of food were respawned at once.
+    patchBoid(index, floatOffset, values) {
+        if (this.isGame) {
+            let p = this.pendingPatches.get(index);
+            if (!p) {
+                p = { mask: 0, values: new Float32Array(8) };
+                this.pendingPatches.set(index, p);
+            }
+            for (let k = 0; k < values.length; k++) {
+                p.values[floatOffset + k] = values[k];
+                p.mask |= 1 << (floatOffset + k);
+            }
+            return;
+        }
+        const stride = this.isGame ? 32 : 16;
+        const byteOffset = index * stride + floatOffset * 4;
+        const data = values instanceof Float32Array ? values : new Float32Array(values);
+        this.device.queue.writeBuffer(this.triangleBufferA, byteOffset, data);
+        this.device.queue.writeBuffer(this.triangleBufferB, byteOffset, data);
+    }
+
+    // Upload the queued boid edits and apply them to both buffers (encoded before the next step)
+    flushPatches(commandEncoder) {
+        const n = this.pendingPatches?.size;
+        if (!n) return;
+        const bytes = n * 48;
+        if (!this.patchBuffer || this.patchBuffer.size < bytes) {
+            this.patchBuffer?.destroy();
+            this.patchBuffer = this.device.createBuffer({
+                size: Math.max(48 * 256, 2 ** Math.ceil(Math.log2(bytes))),
+                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+            });
+            this.patchStaging = new ArrayBuffer(this.patchBuffer.size);
+        }
+        const u32 = new Uint32Array(this.patchStaging);
+        const f32 = new Float32Array(this.patchStaging);
+        let o = 0;
+        for (const [index, p] of this.pendingPatches) {
+            u32[o] = index;
+            u32[o + 1] = p.mask;
+            f32.set(p.values, o + 4);
+            o += 12;
+        }
+        this.pendingPatches.clear();
+        this.device.queue.writeBuffer(this.patchBuffer, 0, this.patchStaging, 0, bytes);
+        this.device.queue.writeBuffer(this.patchCountBuffer, 0, new Uint32Array([n, 0, 0, 0]));
+
+        const bindGroup = this.device.createBindGroup({
+            layout: this.patchPipeline.getBindGroupLayout(0),
+            entries: [
+                { binding: 0, resource: { buffer: this.triangleBufferA } },
+                { binding: 1, resource: { buffer: this.triangleBufferB } },
+                { binding: 2, resource: { buffer: this.patchBuffer } },
+                { binding: 3, resource: { buffer: this.patchCountBuffer } },
+            ],
+        });
+        const pass = commandEncoder.beginComputePass();
+        pass.setPipeline(this.patchPipeline);
+        pass.setBindGroup(0, bindGroup);
+        pass.dispatchWorkgroups(Math.ceil(n / 64));
+        pass.end();
+    }
+
+    // Game mode: per-pack steering, MAX_PACKS x PACK_CONTROL_FLOATS floats
+    setPackControls(data) {
+        this.device.queue.writeBuffer(this.packControlBuffer, 0, data);
+    }
+
     setTriangleData(count, dataArray) {
         this.params.triangleCount = count;
         this.initTriangleBuffers(count, dataArray);
@@ -606,6 +720,7 @@ export class BoidsEngine {
     start() {
         if (this.isRunning) return;
         this.isRunning = true;
+        this.lastFrameTime = null;
         this.frame();
     }
 
@@ -618,16 +733,43 @@ export class BoidsEngine {
 
         this.frameCount++;
 
-        // Update Time per frame
-        this.params.time = (performance.now() - this.startTime) / 1000.0;
-        this.updateParamsBuffer(); // Potentially expensive if 60fps? 32 bytes is cheap.
+        // Simulator: one step per frame. Game: as many fixed steps as real time (x timeScale) calls for.
+        const now = performance.now();
+        let steps = 1;
+        if (this.isGame) {
+            const dt = this.lastFrameTime === null ? SIM_STEP_SECONDS : Math.min(0.25, (now - this.lastFrameTime) / 1000);
+            this.stepAccumulator += dt * this.timeScale;
+            const maxSteps = MAX_STEPS_PER_FRAME * Math.ceil(this.timeScale);
+            steps = Math.floor(this.stepAccumulator / SIM_STEP_SECONDS);
+            if (steps >= maxSteps) {
+                steps = maxSteps;
+                this.stepAccumulator = 0;   // Too far behind: drop time rather than spiral
+            } else {
+                this.stepAccumulator -= steps * SIM_STEP_SECONDS;
+            }
+        }
+        this.lastFrameTime = now;
+
+        this.simTime = this.isGame ? this.stepCount * SIM_STEP_SECONDS : (now - this.startTime) / 1000.0;
+        this.params.time = this.simTime;
+        this.updateParamsBuffer();
 
         const commandEncoder = this.device.createCommandEncoder();
+        this.flushPatches(commandEncoder);
 
-        const useBindGroupA = this.frameCount % 2 === 0;
-        const currentBindGroup = useBindGroupA ? this.bindGroupA : this.bindGroupB;
+        // Even steps read A and write B, odd steps read B and write A
+        for (let i = 0; i < steps; i++) {
+            this.stepCount++;
+            const readsA = this.stepCount % 2 === 0;
+            this.encodeCompute(commandEncoder, readsA ? this.bindGroupA : this.bindGroupB);
+        }
 
-        this.encodeCompute(commandEncoder, currentBindGroup);
+        // No drawable area (e.g. minimized or hidden): keep simulating, skip drawing
+        if (this.canvas.width === 0 || this.canvas.height === 0) {
+            this.device.queue.submit([commandEncoder.finish()]);
+            requestAnimationFrame(this.frame);
+            return;
+        }
 
         const renderPass = commandEncoder.beginRenderPass({
             colorAttachments: [{
@@ -640,7 +782,8 @@ export class BoidsEngine {
         renderPass.setPipeline(this.renderPipeline);
         renderPass.setVertexBuffer(0, this.triangleVertexBuffer);
 
-        const renderBindGroup = useBindGroupA ? this.bindGroupB : this.bindGroupA;
+        // Draw from the buffer the last step wrote (binding 1 is the "current" buffer)
+        const renderBindGroup = this.latestIsB() ? this.bindGroupB : this.bindGroupA;
 
         // Draw arena grid first (so boids render on top)
         if (this.isGame && this.gridPipeline) {
@@ -699,26 +842,33 @@ export class BoidsEngine {
 
         await this.device.queue.onSubmittedWorkDone();
 
-        const resultInBufferA = (this.frameCount % 2 !== 0);
-        const latestBuffer = resultInBufferA ? this.triangleBufferA : this.triangleBufferB;
+        const latestBuffer = this.latestIsB() ? this.triangleBufferB : this.triangleBufferA;
+        this.lastReadSimTime = this.simTime;
 
         const stride = this.isGame ? 32 : 16;
         const size = this.params.triangleCount * stride;
 
-        const gpuReadBuffer = this.device.createBuffer({
-            size: size,
-            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
-        });
+        // The staging buffer and the result array are reused between reads (the caller must not
+        // keep the array past its next readData call, and only one read may be in flight)
+        if (!this.readBuffer || this.readBuffer.size !== size) {
+            this.readBuffer?.destroy();
+            this.readBuffer = this.device.createBuffer({
+                size: size,
+                usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+            });
+            this.readResult = new Float32Array(size / 4);
+        }
+        const gpuReadBuffer = this.readBuffer;
 
         const commandEncoder = this.device.createCommandEncoder();
+        this.flushPatches(commandEncoder);
         commandEncoder.copyBufferToBuffer(latestBuffer, 0, gpuReadBuffer, 0, size);
         this.device.queue.submit([commandEncoder.finish()]);
 
         await gpuReadBuffer.mapAsync(GPUMapMode.READ);
-        const arrayBuffer = gpuReadBuffer.getMappedRange();
-        const result = new Float32Array(arrayBuffer.slice(0));
+        const result = this.readResult;
+        result.set(new Float32Array(gpuReadBuffer.getMappedRange()));
         gpuReadBuffer.unmap();
-        gpuReadBuffer.destroy();
 
         return result;
     }
