@@ -507,9 +507,41 @@ function updateCamera(t) {
     });
 }
 
+// Largest flock the player can eat, and smallest flock that can eat the player
+function sizeThresholds(count) {
+    let eatMax = Math.floor(Math.min(count / CONSUME_RATIO, count - CONSUME_MARGIN)) + 1;
+    while (eatMax > 0 && !canEat(count, eatMax)) eatMax--;
+    let dangerMin = Math.max(1, Math.ceil(Math.max(count * CONSUME_RATIO, count + CONSUME_MARGIN)) - 1);
+    while (!canEat(dangerMin, count)) dangerMin++;
+    return { eatMax, dangerMin };
+}
+
+// Player size samples for the HUD's growth trend
+const SIZE_TREND_SECONDS = 5;
+let sizeHistory = [];
+
+function playerSizeInfo(player, t) {
+    if (sizeHistory.length && t < sizeHistory[sizeHistory.length - 1].t) sizeHistory = [];
+    if (!sizeHistory.length || t - sizeHistory[sizeHistory.length - 1].t >= 0.25) {
+        sizeHistory.push({ t, count: player.count });
+    }
+    while (sizeHistory.length > 1 && t - sizeHistory[0].t > SIZE_TREND_SECONDS) sizeHistory.shift();
+
+    const alive = flocks.filter(f => f.alive);
+    const rank = 1 + alive.filter(f => f.count > player.count).length;
+    return {
+        count: player.count,
+        rank,
+        of: alive.length,
+        trend: player.count - sizeHistory[0].count,
+        ...sizeThresholds(player.count),
+    };
+}
+
 function drawHud(t) {
     const player = flocks[0];
     hud.draw({
+        size: player.alive ? playerSizeInfo(player, t) : null,
         t,
         camera: { x: cameraX, y: cameraY, zoom: cameraZoom },
         aspect: canvas.width / canvas.height,
@@ -905,6 +937,7 @@ function restartGame() {
 function selectDifficulty(key) {
     difficultyKey = key;
     document.querySelectorAll('[data-difficulty]').forEach(b => b.classList.toggle('selected', b.dataset.difficulty === key));
+    document.getElementById('difficulty-desc').textContent = DIFFICULTIES[key].description;
 }
 
 async function initGame() {

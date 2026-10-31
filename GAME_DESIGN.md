@@ -69,7 +69,7 @@ Turning these on makes flocks swirl as loose clouds, but it mutes the hold-and-r
   - **Forage:** it heads for the best patch of food it can see (or a known bloom), avoiding areas near threats, and pulses when there is a lot of food nearby.
   - **Wander:** nothing interesting is in sight.
 - **Personalities** (assigned in turn to the 15 flocks): *hunter* (aggressive, takes risks), *forager* (cautious, food-first) and *opportunist* (balanced).
-- **Difficulty** (picked on the start screen):
+- **Difficulty** (picked on the start screen, which describes the selected level):
 
 | | Easy | Normal | Hard |
 |---|---|---|---|
@@ -83,6 +83,7 @@ Turning these on makes flocks swirl as loose clouds, but it mutes the hold-and-r
 ### Readability (HUD, `hud.js`)
 - **Rings:** green dashed rings around flocks you can eat, red around flocks that can eat you, grey around the rest. Each ring shows the flock's name and size.
 - **Edge arrows:** arrows on the screen edge for flocks off screen (within 18 units) and for blooms. Threats take priority where arrows overlap.
+- **Your size:** a panel above the ability bars shows your size in large type, how much it changed in the last 5 s (▲/▼), your rank, the largest flock you can eat and the smallest flock that can eat you. It flashes green or red when you gain or lose boids, and your size is also shown above your flock.
 - **Minimap:** shows the arena, the next border, flocks, blooms and the camera view.
 - **Other:** ability cooldowns, the game timer with truce/shrink/showdown messages, and an event feed. The leaderboard marks prey with green dots and threats with red dots.
 

@@ -12,6 +12,7 @@
 export const DIFFICULTIES = {
     easy: {
         label: 'Easy',
+        description: 'Enemies react slowly (0.6 s), aim sloppily and see only nearby flocks. They never Dash or Pulse, and they are less interested in hunting you. Good for learning hold and release.',
         thinkTime: 0.6,     // Seconds between decisions (reaction time)
         aimError: 0.3,      // Random aim offset, as a fraction of the distance to the target
         steer: 0.85,        // Steering force relative to the player's
@@ -23,6 +24,7 @@ export const DIFFICULTIES = {
     },
     normal: {
         label: 'Normal',
+        description: 'Enemies react quickly (0.3 s), aim ahead of where you are going and use Dash and Pulse. They see further and slightly prefer hunting you.',
         thinkTime: 0.3,
         aimError: 0.12,
         steer: 1.0,
@@ -34,6 +36,7 @@ export const DIFFICULTIES = {
     },
     hard: {
         label: 'Hard',
+        description: 'Enemies react almost instantly (0.2 s), cut you off with precise intercepts, see furthest and use every ability. They target you over other flocks.',
         thinkTime: 0.2,
         aimError: 0.05,
         steer: 1.0,

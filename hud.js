@@ -1,5 +1,5 @@
 // 2D overlay on top of the WebGPU canvas: who can eat whom, off-screen flocks, minimap,
-// ability cooldowns, arena timer and an event feed.
+// the player's size panel, ability cooldowns, arena timer and an event feed.
 
 const COLORS = {
     prey: '#5dff8a',
@@ -51,8 +51,10 @@ export class Hud {
         this.arrows = [];
         for (const b of state.blooms) this.drawBloom(b);
         for (const f of state.flocks) this.drawFlock(f);
+        this.drawPlayerLabel();
         this.drawArrows();
         this.drawMinimap();
+        this.drawSizePanel();
         this.drawAbilities();
         this.drawTimer();
         this.drawEvents();
@@ -146,6 +148,8 @@ export class Hud {
         const x = cx + dx * scale;
         let y = cy + dy * scale;
         if (x < MINIMAP_SIZE + 40 && y > this.h - MINIMAP_SIZE - 40) y = this.h - MINIMAP_SIZE - 40;
+        // Stay above the size panel and ability bars
+        if (Math.abs(x - cx) < 170 && y > this.h - 132) y = this.h - 132;
         return { x, y };
     }
 
@@ -244,6 +248,80 @@ export class Hud {
             ctx.fill();
             ctx.stroke();
         }
+        ctx.restore();
+    }
+
+    // Flash green or red for a moment whenever the player's size changes
+    sizeFlash(count) {
+        const now = performance.now() / 1000;
+        if (this.lastCount !== undefined && count !== this.lastCount) {
+            this.flash = { color: count > this.lastCount ? COLORS.prey : COLORS.threat, at: now };
+        }
+        this.lastCount = count;
+        if (!this.flash || now - this.flash.at > 0.4) return null;
+        return this.flash.color;
+    }
+
+    drawPlayerLabel() {
+        const { player, size } = this.state;
+        if (!player || !size) return;
+        const p = this.toScreen(player.x, player.y);
+        const r = Math.max(10, player.radius * this.pixelsPerUnit());
+        if (!this.onScreen(p, r)) return;
+        const ctx = this.ctx;
+        ctx.save();
+        ctx.font = 'bold 16px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+        ctx.strokeText(`${size.count}`, p.x, p.y - r - 12);
+        ctx.fillStyle = '#33ccff';
+        ctx.fillText(`${size.count}`, p.x, p.y - r - 12);
+        ctx.restore();
+    }
+
+    // Big readout of the player's own size, just above the ability bars
+    drawSizePanel() {
+        const size = this.state.size;
+        if (!size) return;
+        const ctx = this.ctx;
+        const w = 292, h = 54;
+        const x = this.w / 2 - w / 2;
+        const y = this.h - 34 - 18 - 10 - h;
+        const flash = this.sizeFlash(size.count);
+
+        ctx.save();
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        ctx.fillRect(x, y, w, h);
+        ctx.strokeStyle = flash || 'rgba(51,204,255,0.6)';
+        ctx.lineWidth = flash ? 2 : 1;
+        ctx.strokeRect(x, y, w, h);
+
+        // Size
+        ctx.textAlign = 'left';
+        ctx.font = 'bold 30px sans-serif';
+        ctx.fillStyle = flash || '#33ccff';
+        ctx.fillText(`${size.count}`, x + 12, y + 36);
+        const numW = ctx.measureText(`${size.count}`).width;
+        ctx.font = '10px sans-serif';
+        ctx.fillStyle = 'rgba(255,255,255,0.6)';
+        ctx.fillText('YOUR FLOCK', x + 12, y + 48);
+        if (size.trend !== 0) {
+            ctx.font = 'bold 12px sans-serif';
+            ctx.fillStyle = size.trend > 0 ? COLORS.prey : COLORS.threat;
+            ctx.fillText(`${size.trend > 0 ? '▲ +' : '▼ '}${size.trend}`, x + 18 + numW, y + 22);
+        }
+
+        // Rank and who you can eat / who can eat you
+        ctx.textAlign = 'right';
+        ctx.font = 'bold 13px sans-serif';
+        ctx.fillStyle = size.rank === 1 ? '#ffd24d' : '#ffffff';
+        ctx.fillText(`#${size.rank} of ${size.of}`, x + w - 12, y + 17);
+        ctx.font = '12px sans-serif';
+        ctx.fillStyle = COLORS.prey;
+        ctx.fillText(size.eatMax > 0 ? `You eat flocks ≤ ${size.eatMax}` : 'Too small to eat anyone', x + w - 12, y + 33);
+        ctx.fillStyle = COLORS.threat;
+        ctx.fillText(`Flocks ≥ ${size.dangerMin} eat you`, x + w - 12, y + 48);
         ctx.restore();
     }
 

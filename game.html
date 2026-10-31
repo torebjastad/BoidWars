@@ -154,6 +154,14 @@
             border-color: #4ECDC4;
         }
 
+        #difficulty-desc {
+            font-size: 13px;
+            line-height: 1.4;
+            color: #bbb;
+            min-height: 3.6em;
+            margin: 0.6rem 0 0;
+        }
+
         #start-btn,
         #restart-btn {
             background: #4ECDC4;
@@ -179,7 +187,7 @@
             <p>You lead the <b style="color:#33ccff">blue flock</b>. Grow by eating <b style="color:#ffcc33">food</b>
                 and by devouring smaller flocks. Be the last flock standing,
                 or the largest when the final countdown runs out.</p>
-            <p>A flock needs <b>1.2×</b> your size (and 3 more boids) to eat you, and the same goes for you.
+            <p>A flock needs <b>1.2×</b> your size (and 4 more boids) to eat you, and the same goes for you.
                 <b style="color:#5dff8a">Green</b> rings are prey, <b style="color:#ff4d4d">red</b> rings are danger.</p>
             <p><b>Stragglers</b> (a boid with no flockmate nearby) can be stolen by any flock, whatever its size.
                 Big flocks are <b>slower</b> and slowly <b>shed</b> boids, and the arena <b>shrinks</b> over time.</p>
@@ -196,6 +204,7 @@
             <button data-difficulty="normal">Normal</button>
             <button data-difficulty="hard">Hard</button>
         </div>
+        <p id="difficulty-desc"></p>
         <button id="start-btn">Start Game</button>
     </div>
 
