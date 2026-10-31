@@ -23,7 +23,7 @@ export const DIFFICULTIES = {
     },
     normal: {
         label: 'Normal',
-        thinkTime: 0.35,
+        thinkTime: 0.3,
         aimError: 0.12,
         steer: 1.0,
         lead: 0.75,

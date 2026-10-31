@@ -15,53 +15,56 @@ const ENEMY_FLOCK_COUNT = 15;       // Number of enemy flocks
 const CAPACITY = 6000;              // Boid slots on the GPU, shared by flocks and food
 
 // Arena: half-size (the arena spans -size..+size). It shrinks in stages to force a showdown.
-const ARENA_START = 16;
+const ARENA_START = 14;
 const ZONE_SCHEDULE = [             // [seconds before shrinking, seconds to shrink, new size]
-    [80, 35, 11],
-    [40, 35, 7],
-    [35, 35, 3.5],
+    [50, 30, 9],
+    [30, 30, 6],
+    [25, 25, 3.5],
 ];
-const FINAL_SECONDS = 60;           // After the last shrink: the largest flock wins when this runs out
-const MIN_SPAWN_DISTANCE = 7;       // Between flock spawn points
+const FINAL_SECONDS = 45;           // After the last shrink: the largest flock wins when this runs out
+const MIN_SPAWN_DISTANCE = 6;       // Between flock spawn points
 
 // Food economy
 const FOOD_DENSITY = 0.6;           // Target food per unit² of the current arena
-const FOOD_RESPAWN_RATE = 15;       // Food per second added while below the target
-const FOOD_VALUE = 0.4;             // Chance an eaten food becomes a boid (plenty of food, each worth less)
+const FOOD_RESPAWN_RATE = 14;       // Food per second added while below the target
+const FOOD_VALUE = 0.55;            // Chance an eaten food becomes a boid (plenty of food, each worth less)
 const FOOD_RADIUS = 0.3;            // Food drifts toward flock boids within this distance
-const BLOOM_FIRST = 35;             // Seconds until the first food bloom
-const BLOOM_INTERVAL = [22, 34];    // Seconds between blooms (random in range)
+const BLOOM_FIRST = 20;             // Seconds until the first food bloom
+const BLOOM_INTERVAL = [15, 25];    // Seconds between blooms (random in range)
 const BLOOM_FOOD = 90;              // Food per bloom
 const BLOOM_RADIUS = 1.6;
 
 // Eating
-const TRUCE_SECONDS = 20;           // No flock eats or steals from another until this many seconds in
+const TRUCE_SECONDS = 15;           // No flock eats or steals from another until this many seconds in
 const CAPTURE_RADIUS = 0.14;        // Boids this close interact
 const CONSUME_RATIO = 1.2;          // A flock needs this many times the boids of another to eat it...
-const CONSUME_MARGIN = 3;           // ...and at least this many more boids (keeps early fights from being a coin flip)
+const CONSUME_MARGIN = 4;           // ...and at least this many more boids (keeps early fights from being a coin flip)
 const ISOLATION_RADIUS = 0.3;       // A boid with no flockmate this close is a straggler: anyone can steal it
 const STEAL_IMMUNITY = 1.0;         // Seconds a newly captured boid can't be stolen back
-const DIGEST_TIME = 1.5;            // Seconds before a newly captured boid can capture others
+const DIGEST_TIME = 1.0;            // Seconds before a newly captured boid can capture others
 const SPILL = 0.35;                 // Share of eaten boids that burst out as food instead of joining
 
 // Upkeep: flocks above DECAY_FREE boids shed DECAY_RATE * (size - DECAY_FREE) boids per second.
 // Shed boids are thrown outward; SHED_FOOD_SHARE of them become food, the rest are gone.
-const DECAY_FREE = 30;
+const DECAY_FREE = 40;
 const DECAY_RATE = 0.01;
 const SHED_FOOD_SHARE = 0.5;
 const SHED_SPEED = 0.05;
 const SHED_GRACE = 3;               // Seconds before a flock can pick its own shed food back up
 
 // Movement: big flocks are slower (per-step speeds, the simulation runs at 60 steps/s)
-const BASE_SPEED = 0.06;            // Max speed of a SPEED_REF-sized flock
+const BASE_SPEED = 0.065;           // Max speed of a SPEED_REF-sized flock
 const SPEED_REF = 10;
-const SPEED_EXPONENT = 0.2;         // speed ~ size^-exponent
-const SPEED_MIN_MUL = 0.55;
+const SPEED_EXPONENT = 0.15;        // speed ~ size^-exponent
+const SPEED_MIN_MUL = 0.65;
 const SPEED_MAX_MUL = 1.15;
 const STEER_FORCE = 0.02;           // How hard a flock turns toward its target
 
 // Abilities
-const DASH = { speedMul: 1.7, duration: 0.6, cooldown: 5 };
+const DASH = { speedMul: 1.7, duration: 0.6, cooldown: 4 };
+// Releasing the mouse after holding it (flock pulled into a ball) shoots the boids outward;
+// this speed boost makes the burst punchier. Combines with Dash.
+const RELEASE_BURST = { speedMul: 1.35, duration: 0.35, minHold: 0.25 };
 // Pulse, no cooldown: tap for a quick burst (at least `expand` seconds), hold to stay spread out.
 // While spread, boids push out to radiusBase + radiusPerSqrt * sqrt(size); on release the flock
 // snaps back together for `contract` seconds.
@@ -71,19 +74,21 @@ const PULSE = {
     aiInterval: 2.5,                // Enemy flocks pulse at most this often
 };
 
-// Organic motion: boids swirl around the target and the flock breathes in and out
+// Optional organic layer on top of the boid rules (all 0 = the original swarm dynamics):
+// boids aim at their own points circling the target, and flocks breathe in and out
 const ORGANIC = {
-    wobbleBase: 0.25,               // Radius of each boid's own circling aim point...
-    wobblePerSqrt: 0.05,            // ...growing with sqrt(flock size)
-    steerJitter: 0.35,              // Steering strength varies +-35% between boids
+    wobbleBase: 0,                  // Radius of each boid's own circling aim point (e.g. 0.25)...
+    wobblePerSqrt: 0,               // ...growing with sqrt(flock size) (e.g. 0.05)
+    steerJitter: 0,                 // Steering strength varies +-this between boids (e.g. 0.35)
     breathPeriod: 2.4,              // Seconds per breath (out and in)
-    breathCohesion: 0.6,            // Cohesion swings +-60% over a breath
-    breathSpread: 0.006,            // Outward push at the peak of a breath...
+    breathCohesion: 0,              // Cohesion swings +-this over a breath (e.g. 0.6)
+    breathSpread: 0,                // Outward push at the peak of a breath (e.g. 0.006)...
     breathRadius: 1.4,              // ...out to this multiple of the flock's resting radius
 };
 
-// Mouse: 'follow' = the flock always chases the cursor; 'hold' = only while the left button is held
-const MOUSE_MODE = 'follow';
+// Mouse: 'hold' = the flock steers to the cursor only while the left button is held (release to
+// burst outward); 'follow' = the flock always chases the cursor and left click dashes
+const MOUSE_MODE = 'hold';
 
 // Camera
 const BASE_ZOOM = 0.5;
@@ -215,7 +220,7 @@ function createFlocks() {
             // Snapshot summary (updated every check)
             x: 0, y: 0, vx: 0, vy: 0, radius: 0.3, speed: speedFor(STARTING_BOIDS) * 60, seenAt: 0,
             // Abilities (game time)
-            dashUntil: -1, dashReady: 0, pulseStart: -10, pulseEnd: -10, pulseHeld: false,
+            dashUntil: -1, dashReady: 0, burstUntil: -1, pulseStart: -10, pulseEnd: -10, pulseHeld: false,
             breathPhase: Math.random() * Math.PI * 2,
             shedAccumulator: 0,
             lastHitBy: -1,
@@ -318,21 +323,31 @@ function isUiTarget(e) {
 window.addEventListener('mousemove', e => {
     mouseScreen = { x: e.clientX / window.innerWidth, y: e.clientY / window.innerHeight };
 });
+let mouseHeldSince = 0;
 window.addEventListener('mousedown', e => {
     if (isUiTarget(e) || !game || game.phase !== 'playing') return;
     if (e.button === 0) {
         mouseHeld = true;
+        mouseHeldSince = gameTime();
         if (MOUSE_MODE === 'follow') useAbility(flocks[0], 'dash');
     } else if (e.button === 2) {
-        startPulse(flocks[0], true);
+        useAbility(flocks[0], 'dash');
     }
 });
 window.addEventListener('mouseup', e => {
-    if (e.button === 0) mouseHeld = false;
-    if (e.button === 2 && flocks[0]) releasePulse(flocks[0]);
+    if (e.button !== 0 || !mouseHeld) return;
+    mouseHeld = false;
+    // Let go after pulling the flock together: burst outward
+    const player = flocks[0];
+    if (MOUSE_MODE === 'hold' && player && game.phase === 'playing' && gameTime() - mouseHeldSince >= RELEASE_BURST.minHold) {
+        player.burstUntil = gameTime() + RELEASE_BURST.duration;
+    }
 });
 window.addEventListener('contextmenu', e => e.preventDefault());
-window.addEventListener('blur', () => { if (flocks[0]) releasePulse(flocks[0]); });
+window.addEventListener('blur', () => {
+    mouseHeld = false;
+    if (flocks[0]) releasePulse(flocks[0]);
+});
 
 const isSpace = e => e.code === 'Space' || e.key === ' ';
 document.addEventListener('keydown', e => {
@@ -444,7 +459,9 @@ function updateControls(t) {
             spread = 0;
         }
 
-        const maxSpeed = speedFor(flock.count) * (t < flock.dashUntil ? DASH.speedMul : 1);
+        const maxSpeed = speedFor(flock.count)
+            * (t < flock.dashUntil ? DASH.speedMul : 1)
+            * (t < flock.burstUntil ? RELEASE_BURST.speedMul : 1);
         const o = flock.packId * PACK_CONTROL_FLOATS;
         packControls[o + 0] = target.x;
         packControls[o + 1] = target.y;

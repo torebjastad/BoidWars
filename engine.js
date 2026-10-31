@@ -695,6 +695,13 @@ export class BoidsEngine {
             this.encodeCompute(commandEncoder, readsA ? this.bindGroupA : this.bindGroupB);
         }
 
+        // No drawable area (e.g. minimized or hidden): keep simulating, skip drawing
+        if (this.canvas.width === 0 || this.canvas.height === 0) {
+            this.device.queue.submit([commandEncoder.finish()]);
+            requestAnimationFrame(this.frame);
+            return;
+        }
+
         const renderPass = commandEncoder.beginRenderPass({
             colorAttachments: [{
                 view: this.context.getCurrentTexture().createView(),

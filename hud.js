@@ -252,10 +252,10 @@ export class Hud {
         if (!player) return;
         const items = [
             { key: 'HOLD SPACE', name: 'Pulse', ...abilities.pulse },
-            { key: 'SHIFT', name: 'Dash', ...abilities.dash },
+            { key: 'SHIFT / RIGHT CLICK', name: 'Dash', ...abilities.dash },
         ];
         const ctx = this.ctx;
-        const w = 110, h = 34, gap = 12;
+        const w = 140, h = 34, gap = 12;
         let x = this.w / 2 - (items.length * w + (items.length - 1) * gap) / 2;
         const y = this.h - h - 18;
         for (const it of items) {
