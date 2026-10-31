@@ -51,7 +51,7 @@ For the first 15 s (`TRUCE_SECONDS`), flocks can't eat or steal from each other.
 - **Hold the left mouse button:** every boid steers toward the cursor. With the cursor ahead of the flock, that moves it; with the cursor on the flock, it squeezes into a tight ball. With the button released, the boids just flock on their own, as in the original game (`MOUSE_MODE = 'hold'`).
 - **Release:** boids rushing toward the cursor overshoot and shoot outward, sweeping a wide ring before cohesion pulls them back. A release after holding at least 0.25 s also gives 1.35× speed for 0.35 s (`RELEASE_BURST`), so the burst goes further. Timing it well is the main skill.
 - **Dash** (`Shift` or right click, 4 s cooldown): 1.7× speed for 0.6 s, for finishing a chase or escaping one. It stacks with the release burst (about 2.3×) for a big explosion or a long lunge.
-- **Pulse** (hold `Space`, no cooldown): tap for a quick burst, or hold to keep the flock spread over a wide disc. Its radius is 0.6 + 0.2·√size: about 1.5 units at 20 boids and 3.4 at 200. Release and the flock snaps back together. It sweeps up much more food, but your stragglers can be stolen while you're spread out, which is the trade-off. Enemy flocks only tap it, at most every 2.5 s (`PULSE.aiInterval`).
+- **Pulse** (hold `Space`, no cooldown): tap for a quick burst, or hold to keep the flock spread over a wide disc. Its radius is 0.6 + 0.15·√size, capped at 1.8 units (`PULSE.radiusMax`) and at a quarter of the arena half-size (`PULSE.zoneShare`): about 1.3 units at 20 boids, and the cap from about 65 boids up. A big flock just gets denser when it pulses, not wider, so it can't blanket the map. Release and the flock snaps back together. It sweeps up much more food, but your stragglers can be stolen while you're spread out, which is the trade-off. Enemy flocks only tap it, at most every 2.5 s (`PULSE.aiInterval`).
 - **Enemy flocks** steer toward their AI's target all the time, and use Dash and Pulse too.
 
 ### Optional organic layer (`ORGANIC` in `game.js`, off by default)
@@ -104,7 +104,7 @@ These come from automated games where an AI (Hard brain) played the player's flo
 | One flock runs away with it | Raise `DECAY_RATE` or `SPILL`; lower `DECAY_FREE`; raise `SPEED_EXPONENT` |
 | Games too long | Shorten `ZONE_SCHEDULE` holds or `FINAL_SECONDS` |
 | Fights are over too fast | Raise `DIGEST_TIME` |
-| Pulse too weak or too strong | `PULSE.radiusBase`, `PULSE.radiusPerSqrt`, `PULSE.spread` |
+| Pulse too weak or too strong | `PULSE.radiusMax`, `PULSE.zoneShare`, `PULSE.radiusPerSqrt`, `PULSE.spread` |
 | Release burst too weak or too strong | `RELEASE_BURST.speedMul`, `RELEASE_BURST.duration` |
 | Want the old follow-the-cursor control | `MOUSE_MODE = 'follow'` (left click then dashes) |
 | Flock too rigid | Raise the `ORGANIC` values |

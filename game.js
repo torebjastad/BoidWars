@@ -66,11 +66,12 @@ const DASH = { speedMul: 1.7, duration: 0.6, cooldown: 4 };
 // this speed boost makes the burst punchier. Combines with Dash.
 const RELEASE_BURST = { speedMul: 1.35, duration: 0.35, minHold: 0.25 };
 // Pulse, no cooldown: tap for a quick burst (at least `expand` seconds), hold to stay spread out.
-// While spread, boids push out to radiusBase + radiusPerSqrt * sqrt(size); on release the flock
+// While spread, boids push out to radiusBase + radiusPerSqrt * sqrt(size), capped at radiusMax and
+// at zoneShare of the arena half-size, so a big flock can't blanket the map. On release the flock
 // snaps back together for `contract` seconds.
 const PULSE = {
     expand: 0.3, contract: 0.6, spread: 0.03, steerDuringExpand: 0.5, contractCohesion: 4,
-    radiusBase: 0.6, radiusPerSqrt: 0.2,
+    radiusBase: 0.6, radiusPerSqrt: 0.15, radiusMax: 1.8, zoneShare: 0.25,
     aiInterval: 2.5,                // Enemy flocks pulse at most this often
 };
 
@@ -452,7 +453,8 @@ function updateControls(t) {
         if (t >= flock.pulseStart && t < flock.pulseEnd) {
             cohesionScale = 0;
             spread = PULSE.spread;
-            spreadRadius = PULSE.radiusBase + PULSE.radiusPerSqrt * sqrtCount;
+            spreadRadius = Math.min(PULSE.radiusBase + PULSE.radiusPerSqrt * sqrtCount,
+                PULSE.radiusMax, PULSE.zoneShare * game.zone.size);
             steer *= PULSE.steerDuringExpand;
         } else if (t >= flock.pulseEnd && t < flock.pulseEnd + PULSE.contract) {
             cohesionScale = PULSE.contractCohesion;
